@@ -1,0 +1,138 @@
+#+TITLE: acp.el
+#+AUTHOR: Álvaro Ramírez
+
+* This project needs your funding
+
+As you pay for those useful LLM tokens, consider [[https://github.com/sponsors/xenodium][sponsoring]] development and maintenance of this project.
+
+=acp.el= enables us to build better integrations and tools into our beloved Emacs text editor. With your help, we can make this effort [[https://github.com/sponsors/xenodium][sustainable]].
+
+Thank you!
+
+[[https://xenodium.com/][Alvaro]]
+
+* acp.el
+
+acp.el implements the Agent Client Protocol (ACP) for Emacs as per [[https://agentclientprotocol.com][agentclientprotocol.com]].
+
+ACP is a standardized protocol for communicating with AI agents like Gemini CLI, Claude Code, etc.
+
+􀇾 *Note:* This package is in the very early stages, isn't yet API stable, and is bound to change.
+
+* Install
+
+** Prerequisites
+
+Install an AI agent command-line tool like:
+
+- Gemini CLI: =gemini-cli= (https://github.com/google-gemini/gemini-cli)
+- Claude Code: =claude-code-acp= (https://www.anthropic.com/claude-code)
+
+** Package Installation
+Clone the repository and add to your Emacs load path:
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/path/to/acp.el/")
+(require 'acp)
+#+end_src
+
+* Sample Usage
+
+** Initialization
+
+#+begin_src emacs-lisp
+  (setq client (acp-make-client :api-key "your-api-key-here"))
+
+  (acp-send-request
+   :client client
+   :request (acp-make-initialize-request :protocol-version 1)
+   :on-success (lambda (response)
+                 (message "Initialize success: %s" response))
+   :on-failure (lambda (error)
+                 (message "Initialize failed: %s" error)))
+#+end_src
+
+#+RESULTS:
+: Initialize success:
+:
+: ((protocolVersion . 1)
+:  (authMethods . [((id . oauth-personal)
+:                   (name . Log in with Google)
+:                   (description . :null))
+:                  ((id . gemini-api-key)
+:                   (name . Use Gemini API key)
+:                   (description . Requires setting the `GEMINI_API_KEY` environment variable))
+:                  ((id . vertex-ai)
+:                   (name . Vertex AI)
+:                   (description . :null))])
+:  (agentCapabilities (loadSession . :false)
+:                     (promptCapabilities (image . t)
+:                                         (audio . t)
+:                                         (embeddedContext . t))))
+
+Typically, you'd need to send a sequence of requests before you can send the agent prompts to interact with:
+
+1. =acp-make-initialize-request=
+2. =acp-make-authenticate-request= (not needed for Claude Code)
+3. =acp-make-session-new-request=
+
+You may now send the agent prompts with:
+
+4. =acp-make-session-prompt-request=
+
+* Subscriptions
+
+#+begin_src emacs-lisp :lexical no
+  (acp-subscribe-to-requests client
+                             (lambda (request)
+                               (message "Received request: %s" request)))
+
+  (acp-subscribe-to-notifications client
+                                  (lambda (notification)
+                                    (message "Received notification: %s" notification)))
+#+end_src
+
+* Cleanup
+
+#+begin_src emacs-lisp :lexical no
+  (acp-shutdown client)
+#+end_src
+
+* APIs
+
+#+BEGIN_SRC emacs-lisp :results table :colnames '("Function" "Type" "Description") :exports results
+  (let ((rows))
+    (mapatoms
+     (lambda (symbol)
+       (when (and (string-match "^acp-[^-]" (symbol-name symbol))
+                  (fboundp symbol))  ; Ensure it's a function
+         (push `(,(symbol-name symbol)
+                 ,(or (car (split-string
+                            (or (documentation symbol t) "No documentation")
+                            "\n"))
+                      "No documentation"))
+               rows))))
+    (sort rows (lambda (a b) (string< (car a) (car b)))))
+#+END_SRC
+
+#+RESULTS:
+| acp-make-authenticate-request                | Instantiate an "authenticate" request.               |
+| acp-make-claude-client                       | Create Claude Code ACP client with API-KEY.          |
+| acp-make-client                              | Create generic ACP client with process.              |
+| acp-make-gemini-client                       | Create a Gemini ACP client with API-KEY.             |
+| acp-make-initialize-request                  | Instantiate an "initialize" request.                 |
+| acp-make-session-new-request                 | Instantiate a "session/new" request.                 |
+| acp-make-session-prompt-request              | Instantiate an "initialize" request.                 |
+| acp-make-session-request-permission-response | Instantiate a "session/request_permission" response. |
+| acp-send-request                             | Send REQUEST from CLIENT.                            |
+| acp-send-response                            | Send a request RESPONSE from CLIENT.                 |
+| acp-shutdown                                 | Shutdown ACP CLIENT and release resources.           |
+| acp-subscribe-to-errors                      | Subscribe to agent errors using CLIENT.              |
+| acp-subscribe-to-notifications               | Subscribe to incoming CLIENT notifications.          |
+| acp-subscribe-to-requests                    | Subscribe to incoming CLIENT requests.               |
+
+* FAQ
+
+** Why not use [[https://github.com/emacs-mirror/emacs/blob/master/lisp/jsonrpc.el][jsonrpc.el]]?
+
+That was my initial intention, though it doesn't seem possible with [[https://github.com/emacs-mirror/emacs/blob/1d6ec2a0406c8a53fcf793b05453dbcc7e809d76/lisp/jsonrpc.el#L586][Content-Length automatically appended]] to requests sent. If you do know of a way, I'd love to know.
