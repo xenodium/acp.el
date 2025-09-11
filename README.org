@@ -5,7 +5,7 @@
 
 As you pay for those useful LLM tokens, consider [[https://github.com/sponsors/xenodium][sponsoring]] development and maintenance of this project.
 
-=acp.el= enables us to build better integrations and tools into our beloved Emacs text editor. With your help, we can make this effort [[https://github.com/sponsors/xenodium][sustainable]].
+=acp.el= enables us to build better integrations and tools into our beloved Emacs text editor. With your help, I can make this effort more [[https://github.com/sponsors/xenodium][sustainable]].
 
 Thank you!
 
@@ -17,7 +17,7 @@ acp.el implements the Agent Client Protocol (ACP) for Emacs as per [[https://age
 
 ACP is a standardized protocol for communicating with AI agents like Gemini CLI, Claude Code, etc.
 
-􀇾 *Note:* This package is in the very early stages, isn't yet API stable, and is bound to change.
+*Note:* This package is in the very early stages, isn't yet API stable, and is bound to change.
 
 * Install
 
@@ -52,8 +52,9 @@ Clone the repository and add to your Emacs load path:
                  (message "Initialize failed: %s" error)))
 #+end_src
 
+Initialize success:
+
 #+RESULTS:
-: Initialize success:
 : ((protocolVersion . 1)
 :  (authMethods . [((id . oauth-personal)
 :                   (name . Log in with Google)
