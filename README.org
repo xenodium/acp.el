@@ -82,7 +82,7 @@ You may now send the agent prompts with:
 
 * Subscriptions
 
-#+begin_src emacs-lisp :lexical no
+#+begin_src emacs-lisp :lexical no :exports both
   (acp-subscribe-to-requests client
                              (lambda (request)
                                (message "Received request: %s" request)))
