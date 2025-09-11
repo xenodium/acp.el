@@ -41,6 +41,17 @@
 
 (defconst acp--jsonrpc-version "2.0")
 
+(defun acp--make-client (&key process)
+  "Make an internal client using PROCESS."
+  (unless process
+    (error ":process is required"))
+  (list (cons :process process)
+        (cons :pending-requests ())
+        (cons :request-id 0)
+        (cons :notification-handlers ())
+        (cons :request-handlers ())
+        (cons :error-handlers ())))
+
 (cl-defun acp-make-gemini-client (&key api-key)
   "Create a Gemini ACP client with API-KEY.
 
@@ -115,17 +126,6 @@ For example:
       (setq client (acp--make-client :process process))
       client)))
 
-(defun acp--make-client (&key process)
-  "Make an internal client using PROCESS."
-  (unless process
-    (error ":process is required"))
-  (list (cons :process process)
-        (cons :pending-requests ())
-        (cons :request-id 0)
-        (cons :notification-handlers ())
-        (cons :request-handlers ())
-        (cons :error-handlers ())))
-
 (defun acp-subscribe-to-notifications (client on-notification)
   "Subscribe to incoming CLIENT notifications.
 
@@ -164,6 +164,13 @@ Note: These are agent process errors.
   (let ((handlers (map-elt client :error-handlers)))
     (push on-error handlers)
     (map-put! client :error-handlers handlers)))
+
+(cl-defun acp-shutdown (client)
+  "Shutdown ACP CLIENT and release resources."
+  (unless client
+    (error ":client is required"))
+  (when (process-live-p (map-elt client :process))
+    (delete-process (map-elt client :process))))
 
 (cl-defun acp-send-request (&key client request on-success on-failure sync)
   "Send REQUEST from CLIENT.
@@ -382,13 +389,6 @@ Returns non-nil if error was parseable."
                 (map-elt (json-parse-string .error.message :object-type 'alist) 'error)
               (error nil)))
         (error nil)))))
-
-(cl-defun acp-shutdown (client)
-  "Shutdown ACP CLIENT and release resources."
-  (unless client
-    (error ":client is required"))
-  (when (process-live-p (map-elt client :process))
-    (delete-process (map-elt client :process))))
 
 (defun acp--log (label format-string &rest args)
   "Log message using LABEL, FORMAT-STRING, and ARGS."
