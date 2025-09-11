@@ -40,7 +40,7 @@ Clone the repository and add to your Emacs load path:
 
 ** Initialization
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :exports both
   (setq client (acp-make-client :api-key "your-api-key-here"))
 
   (acp-send-request
