@@ -54,7 +54,6 @@ Clone the repository and add to your Emacs load path:
 
 #+RESULTS:
 : Initialize success:
-:
 : ((protocolVersion . 1)
 :  (authMethods . [((id . oauth-personal)
 :                   (name . Log in with Google)
