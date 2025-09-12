@@ -41,7 +41,7 @@
 
 (defconst acp--jsonrpc-version "2.0")
 
-(defun acp--make-client (&key process)
+(cl-defun acp--make-client (&key process)
   "Make an internal client using PROCESS."
   (unless process
     (error ":process is required"))
@@ -126,7 +126,7 @@ For example:
       (setq client (acp--make-client :process process))
       client)))
 
-(defun acp-subscribe-to-notifications (client on-notification)
+(cl-defun acp-subscribe-to-notifications (&key client on-notification)
   "Subscribe to incoming CLIENT notifications.
 
 ON-NOTIFICATION is of the form: (lambda (notification))"
@@ -138,7 +138,7 @@ ON-NOTIFICATION is of the form: (lambda (notification))"
     (push on-notification handlers)
     (map-put! client :notification-handlers handlers)))
 
-(defun acp-subscribe-to-requests (client on-request)
+(cl-defun acp-subscribe-to-requests (&key client on-request)
   "Subscribe to incoming CLIENT requests.
 
 ON-REQUEST is of the form: (lambda (request))"
@@ -150,7 +150,7 @@ ON-REQUEST is of the form: (lambda (request))"
     (push on-request handlers)
     (map-put! client :request-handlers handlers)))
 
-(defun acp-subscribe-to-errors (client on-error)
+(cl-defun acp-subscribe-to-errors (&key client on-error)
   "Subscribe to agent errors using CLIENT.
 
 ON-ERROR is of the form: (lambda (error))
@@ -165,7 +165,7 @@ Note: These are agent process errors.
     (push on-error handlers)
     (map-put! client :error-handlers handlers)))
 
-(cl-defun acp-shutdown (client)
+(cl-defun acp-shutdown (&key client)
   "Shutdown ACP CLIENT and release resources."
   (unless client
     (error ":client is required"))
