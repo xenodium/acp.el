@@ -41,6 +41,8 @@
 
 (defconst acp--jsonrpc-version "2.0")
 
+(defvar acp-logging-enabled nil)
+
 (cl-defun acp--make-client (&key process)
   "Make an internal client using PROCESS."
   (unless process
@@ -208,12 +210,9 @@ When non-nil SYNC, send request synchronously."
                 (lambda (data)
                   (setq result data
                         done 'error))))
+    (acp--log "OUTGOING OBJECT" "%s" request)
     (let ((json (concat (json-serialize request) "\n")))
-      (acp--json-log "OUTGOING REQUEST"
-                     (with-temp-buffer
-                       (insert json)
-                       (json-pretty-print (point-min) (point-max))
-                       (buffer-string)))
+      (acp--json-log "OUTGOING REQUEST" (acp--json-pretty-print json))
       (process-send-string proc json))
     (when sync
       (while (not done)
@@ -327,18 +326,11 @@ ON-REQUEST is of the form (lambda (request))."
   (unless on-request
     (error ":on-request is required"))
   (when-let ((logging t))
-    (acp--log "INCOMING JSON" "%s"
-              (with-temp-buffer
-                (insert json)
-                (json-pretty-print (point-min) (point-max))
-                (buffer-string)))
+    (acp--log "INCOMING JSON" "%s" json)
     (let ((object (json-parse-string json :object-type 'alist)))
       (let-alist object
         (acp--json-log (format "INCOMING (%s)" .method)
-                       (with-temp-buffer
-                         (insert json)
-                         (json-pretty-print (point-min) (point-max))
-                         (buffer-string)))
+                       (acp--json-pretty-print json))
         (cond
          ;; Method request result (success)
          ((and .result .id
@@ -394,12 +386,13 @@ Returns non-nil if error was parseable."
   "Log message using LABEL, FORMAT-STRING, and ARGS."
   (unless format-string
     (error ":format-string is required"))
-  (let ((log-buffer (get-buffer-create "*acp log*")))
-    (with-current-buffer log-buffer
-      (goto-char (point-max))
-      (if label
-          (insert label " >\n\n" (apply #'format format-string args) "\n\n")
-        (insert (apply #'format format-string args))))))
+  (when acp-logging-enabled
+    (let ((log-buffer (get-buffer-create "*acp log*")))
+      (with-current-buffer log-buffer
+        (goto-char (point-max))
+        (if label
+            (insert label " >\n\n" (apply #'format format-string args) "\n\n")
+          (insert (apply #'format format-string args)))))))
 
 (defun acp--json-log (label json)
   "Log to json buffer using LABEL and JSON."
@@ -407,10 +400,20 @@ Returns non-nil if error was parseable."
     (error ":label is required"))
   (unless json
     (error ":json is required"))
-  (let ((log-buffer (get-buffer-create "*acp json log*")))
-    (with-current-buffer log-buffer
-      (goto-char (point-max))
-      (insert (concat "\n\n" label " >\n\n" json)))))
+  (when acp-logging-enabled
+    (let ((log-buffer (get-buffer-create "*acp json log*")))
+      (with-current-buffer log-buffer
+        (goto-char (point-max))
+        (insert (concat "\n\n" label " >\n\n" json))))))
+
+(defun acp--json-pretty-print (json)
+  "Return a pretty-printed JSON string."
+  (if acp-logging-enabled
+    (with-temp-buffer
+      (insert json)
+      (json-pretty-print (point-min) (point-max))
+      (buffer-string))
+    json))
 
 (provide 'acp)
 
