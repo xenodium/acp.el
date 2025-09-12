@@ -92,15 +92,13 @@ For example:
          (process-environment (append environment-variables process-environment))
          (stderr-proc (make-pipe-process
                        :name (format "acp-client-stderr(%s)" command)
+                       :buffer nil
                        :filter (lambda (_process raw-output)
                                  (acp--log "STDERR" "%s" (string-trim raw-output))
                                  (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
                                    (acp--log "API-ERROR" "%s" (string-trim raw-output))
                                    (dolist (handler (alist-get :error-handlers client))
-                                     (funcall handler api-error))))
-                       :sentinel (lambda (process _event)
-                                   (when (process-buffer process)
-                                     (kill-buffer (process-buffer process)))))))
+                                     (funcall handler api-error)))))))
     (let ((process (make-process
                     :name (format "acp-client(%s)" command)
                     :command (cons command command-params)
