@@ -283,7 +283,7 @@ See response https://agentclientprotocol.com/protocol/schema#newsessionresponse.
                 (mcpServers . ,(or mcp-servers []))))))
 
 (cl-defun acp-make-session-prompt-request (&key session-id prompt)
-  "Instantiate an \"initialize\" request.
+  "Instantiate an \"session/prompt\" request.
 
 See request https://agentclientprotocol.com/protocol/schema#promptrequest for
 SESSION-ID and PROMPT usage.
