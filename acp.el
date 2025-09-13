@@ -413,6 +413,13 @@ Returns non-nil if error was parseable."
       (buffer-string))
     json))
 
+(defun acp-reset-logs ()
+  "Reset log buffers."
+  (with-current-buffer (get-buffer-create "*acp json log*")
+    (erase-buffer))
+  (with-current-buffer (get-buffer-create "*acp log*")
+    (erase-buffer)))
+
 (provide 'acp)
 
 ;;; acp.el ends here
