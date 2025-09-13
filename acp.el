@@ -311,6 +311,20 @@ https://agentclientprotocol.com/protocol/schema#requestpermissionresponse."
     (:result . ((outcome . ((outcome . "selected")
                             (optionId . ,option-id)))))))
 
+(cl-defun acp-make-session-cancel-request (&key session-id reason)
+  "Instantiate a \"session/cancel\" request.
+
+SESSION-ID is required and should be the ID of the session to cancel.
+
+REASON is an optional string explaining the cancellation reason.
+
+See https://agentclientprotocol.com/protocol/schema#sessioncancelrequest for details."
+  (unless session-id
+    (error ":session-id is required"))
+  `((:method . "session/cancel")
+    (:params . ((sessionId . ,session-id)
+                ,@(when reason `((reason . ,reason)))))))
+
 (cl-defun acp--route-incoming-event (&key client json on-notification on-request)
   "Parse CLIENT's incoming JSON event and route as notification or request.
 
