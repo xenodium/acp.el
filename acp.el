@@ -103,6 +103,7 @@ For example:
                     :name (format "acp-client(%s)" command)
                     :command (cons command command-params)
                     :stderr stderr-proc
+                    :connection-type 'pipe
                     :filter (lambda (_proc input)
                               (acp--log "INCOMING TEXT" "%s" input)
                               (setq pending-input (concat pending-input input))
