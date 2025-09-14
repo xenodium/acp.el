@@ -210,8 +210,8 @@ When non-nil SYNC, send request synchronously."
                   (setq result data
                         done 'error))))
     (acp--log "OUTGOING OBJECT" "%s" request)
+    (acp--log-traffic 'outgoing request)
     (let ((json (concat (json-serialize request) "\n")))
-      (acp--json-log "OUTGOING REQUEST" (acp--json-pretty-print json))
       (process-send-string proc json))
     (when sync
       (while (not done)
@@ -235,7 +235,7 @@ When non-nil SYNC, send request synchronously."
                        (id . ,request-id)
                        (result . ,result-data))))
       (let ((data (concat (json-serialize response) "\n")))
-        (acp--json-log "OUTGOING RESULT" data)
+        (acp--log-traffic 'outgoing response)
         (process-send-string proc data)))))
 
 (cl-defun acp-make-initialize-request (&key protocol-version
@@ -341,9 +341,8 @@ ON-REQUEST is of the form (lambda (request))."
   (when-let ((logging t))
     (acp--log "INCOMING JSON" "%s" json)
     (let ((object (json-parse-string json :object-type 'alist)))
+      (acp--log-traffic 'incoming object)
       (let-alist object
-        (acp--json-log (format "INCOMING (%s)" .method)
-                       (acp--json-pretty-print json))
         (cond
          ;; Method request result (success)
          ((and .result .id
@@ -407,18 +406,6 @@ Returns non-nil if error was parseable."
             (insert label " >\n\n" (apply #'format format-string args) "\n\n")
           (insert (apply #'format format-string args)))))))
 
-(defun acp--json-log (label json)
-  "Log to json buffer using LABEL and JSON."
-  (unless label
-    (error ":label is required"))
-  (unless json
-    (error ":json is required"))
-  (when acp-logging-enabled
-    (let ((log-buffer (get-buffer-create "*acp json log*")))
-      (with-current-buffer log-buffer
-        (goto-char (point-max))
-        (insert (concat "\n\n" label " >\n\n" json))))))
-
 (defun acp--json-pretty-print (json)
   "Return a pretty-printed JSON string."
   (if acp-logging-enabled
@@ -428,11 +415,73 @@ Returns non-nil if error was parseable."
       (buffer-string))
     json))
 
+(defun acp--log-traffic (kind object)
+  "Log traffic message to \"*acp traffic*\" buffer.
+KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
+  (let ((traffic-buffer (get-buffer-create "*acp traffic*")))
+    (with-current-buffer traffic-buffer
+      (goto-char (point-max))
+      (let* ((timestamp (format-time-string "%H:%M:%S.%3N"))
+             (direction (if (eq kind 'incoming) "←" "→"))
+             (method (alist-get 'method object))
+             (id (alist-get 'id object))
+             (has-result (alist-get 'result object))
+             (has-error (alist-get 'error object))
+             (msg-type (cond
+                        ((and id (or has-result has-error)) "response")
+                        ((and method id) "request")
+                        ((and method (not id)) "notification")
+                        (t "unknown")))
+             (method-info (or method
+                              (when has-result
+                                "result")
+                              (when has-error
+                                "error")
+                              "unknown"))
+             (line-text (format "%s %s %-12s %s\n"
+                                timestamp
+                                (propertize direction 'face font-lock-string-face)
+                                msg-type
+                                (propertize method-info 'face font-lock-function-name-face)))
+             (action-keymap (let ((map (make-sparse-keymap)))
+                              (define-key map [mouse-1]
+                                          (lambda ()
+                                            (interactive)
+                                            (acp--show-json-object object)))
+                              (define-key map (kbd "RET")
+                                          (lambda ()
+                                            (interactive)
+                                            (acp--show-json-object object)))
+                              (define-key map [remap self-insert-command] 'ignore)
+                              map)))
+        (add-text-properties 0 (length line-text)
+                             `(keymap ,action-keymap
+                                      json-object ,object)
+                             line-text)
+        (insert line-text)))
+    ;; Keep buffer size manageable (last 1000 lines)
+    (when (> (count-lines (point-min) (point-max)) 1000)
+      (goto-char (point-min))
+      (forward-line 100)
+      (delete-region (point-min) (point)))))
+
+(defun acp--show-json-object (object)
+  "Display the JSON OBJECT in a pretty-printed buffer."
+  (let ((json-buffer (get-buffer-create "*json object*")))
+    (with-current-buffer json-buffer
+      (read-only-mode -1)
+      (erase-buffer)
+      (insert (json-encode object))
+      (json-pretty-print-buffer)
+      (goto-char (point-min))
+      (read-only-mode 1))
+    (display-buffer json-buffer)))
+
 (defun acp-reset-logs ()
   "Reset log buffers."
-  (with-current-buffer (get-buffer-create "*acp json log*")
-    (erase-buffer))
   (with-current-buffer (get-buffer-create "*acp log*")
+    (erase-buffer))
+  (with-current-buffer (get-buffer-create "*acp traffic*")
     (erase-buffer)))
 
 (provide 'acp)
