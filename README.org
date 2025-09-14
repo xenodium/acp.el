@@ -15,7 +15,7 @@ Thank you!
 
 acp.el implements the Agent Client Protocol (ACP) for Emacs as per [[https://agentclientprotocol.com][agentclientprotocol.com]].
 
-ACP is a standardized protocol for communicating with AI agents like Gemini CLI, Claude Code, etc.
+ACP is a standardized protocol for communicating with LLM agents like Gemini CLI, Claude Code, etc.
 
 *Note:* This package is in the very early stages, isn't yet API stable, and is bound to change.
 
@@ -25,8 +25,8 @@ ACP is a standardized protocol for communicating with AI agents like Gemini CLI,
 
 Install an AI agent command-line tool like:
 
-- Gemini CLI: =gemini-cli= (https://github.com/google-gemini/gemini-cli)
-- Claude Code: =claude-code-acp= (https://www.anthropic.com/claude-code)
+- Gemini CLI: =gemini-cli= - [[https://github.com/google-gemini/gemini-cli][github.com/google-gemini/gemini-cli]]
+- Claude Code: =claude-code-acp= - [[https://www.anthropic.com/claude-code][anthropic.com/claude-code]]
 
 ** Package Installation
 Clone the repository and add to your Emacs load path:
