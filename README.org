@@ -98,6 +98,20 @@ You may now send the agent prompts with:
   (acp-shutdown client)
 #+end_src
 
+* Logging
+
+Logging can be enabled via:
+
+#+begin_src emacs-lisp :lexical no
+  (setq acp-logging-enabled t)
+#+end_src
+
+Look out for =*acp log*= and =*acp traffic*= buffers.
+
+The =*acp traffic*= is particularly useful to inspecting incomng or outgoing traffic.
+
+[[file:traffic.png]]
+
 * APIs
 
 #+BEGIN_SRC emacs-lisp :results table :colnames '("Function" "Type" "Description") :exports results
