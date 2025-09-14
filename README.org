@@ -130,20 +130,22 @@ The =*acp traffic*= is particularly useful to inspecting incomng or outgoing tra
 #+END_SRC
 
 #+RESULTS:
-| acp-make-authenticate-request                | Instantiate an "authenticate" request.               |
-| acp-make-claude-client                       | Create Claude Code ACP client with API-KEY.          |
-| acp-make-client                              | Create generic ACP client with process.              |
-| acp-make-gemini-client                       | Create a Gemini ACP client with API-KEY.             |
-| acp-make-initialize-request                  | Instantiate an "initialize" request.                 |
-| acp-make-session-new-request                 | Instantiate a "session/new" request.                 |
-| acp-make-session-prompt-request              | Instantiate an "initialize" request.                 |
-| acp-make-session-request-permission-response | Instantiate a "session/request_permission" response. |
-| acp-send-request                             | Send REQUEST from CLIENT.                            |
-| acp-send-response                            | Send a request RESPONSE from CLIENT.                 |
-| acp-shutdown                                 | Shutdown ACP CLIENT and release resources.           |
-| acp-subscribe-to-errors                      | Subscribe to agent errors using CLIENT.              |
-| acp-subscribe-to-notifications               | Subscribe to incoming CLIENT notifications.          |
-| acp-subscribe-to-requests                    | Subscribe to incoming CLIENT requests.               |
+| acp-make-authenticate-request                | Instantiate an "authenticate" request.                                               |
+| acp-make-claude-client                       | Create Claude Code ACP client with API-KEY.                                          |
+| acp-make-client                              | Create generic ACP client with process.                                              |
+| acp-make-gemini-client                       | Create a Gemini ACP client with API-KEY.                                             |
+| acp-make-initialize-request                  | Instantiate an "initialize" request.                                                 |
+| acp-make-session-cancel-request              | Instantiate a "session/cancel" request.                                              |
+| acp-make-session-new-request                 | Instantiate a "session/new" request.                                                 |
+| acp-make-session-prompt-request              | Instantiate an "session/prompt" request.                                             |
+| acp-make-session-request-permission-response | Instantiate a "session/request_permission" response.                                 |
+| acp-reset-logs                               | Reset log buffers.                                                                   |
+| acp-send-request                             | Send REQUEST from CLIENT.                                                            |
+| acp-send-response                            | Send a request RESPONSE from CLIENT.                                                 |
+| acp-shutdown                                 | Shutdown ACP CLIENT and release resources.                                           |
+| acp-subscribe-to-errors                      | Subscribe to agent errors using CLIENT.                                              |
+| acp-subscribe-to-notifications               | Subscribe to incoming CLIENT notifications.                                          |
+| acp-subscribe-to-requests                    | Subscribe to incoming CLIENT requests.                                               |
 
 * FAQ
 
