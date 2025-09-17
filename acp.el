@@ -43,11 +43,16 @@
 
 (defvar acp-logging-enabled nil)
 
-(cl-defun acp--make-client (&key process)
-  "Make an internal client using PROCESS."
-  (unless process
-    (error ":process is required"))
-  (list (cons :process process)
+(cl-defun acp-make-client (&key command command-params environment-variables)
+  "Make an internal client with COMMAND COMMAND-PARAMS and ENVIRONMENT-VARIABLES."
+  (unless command
+    (error ":command is required"))
+  (unless (executable-find command)
+    (error "%s not found.  Please install" command))
+  (list (cons :process nil)
+        (cons :command command)
+        (cons :command-params command-params)
+        (cons :environment-variables environment-variables)
         (cons :pending-requests ())
         (cons :request-id 0)
         (cons :notification-handlers ())
@@ -75,23 +80,26 @@ https://www.anthropic.com/claude-code"
                    :environment-variables (when api-key
                                             (list (format "ANTHROPIC_API_KEY=%s" api-key)))))
 
-(cl-defun acp-make-client (&key command command-params environment-variables)
-  "Create generic ACP client with process.
+(defun acp--client-started-p (client)
+  "Return non-nil if CLIENT process has been started."
+  (and (map-elt client :process)
+       (process-live-p (map-elt client :process))))
 
-For example:
-
-  COMMAND: gemini
-  COMMAND-PARAMS: --experimental-acp
-  ENVIRONMENT-VARIABLES: (\"GEMINI_API_KEY=123\")"
-  (unless command
+(cl-defun acp--start-client (&key client)
+  "Start CLIENT."
+  (unless client
+    (error ":client is required"))
+  (unless (map-elt client :command)
     (error ":command is required"))
-  (unless (executable-find command)
-    (error "%s not found.  Please install" command))
+  (unless (executable-find (map-elt client :command))
+    (error "%s not found.  Please install" (map-elt client :command)))
+  (when (acp--client-started-p client)
+    (error "Client already started"))
   (let* ((pending-input "")
-         (client nil)
-         (process-environment (append environment-variables process-environment))
+         (process-environment (append (map-elt client :environment-variables)
+                                      process-environment))
          (stderr-proc (make-pipe-process
-                       :name (format "acp-client-stderr(%s)" command)
+                       :name (format "acp-client-stderr(%s)" (map-elt client :command))
                        :buffer nil
                        :filter (lambda (_process raw-output)
                                  (acp--log "STDERR" "%s" (string-trim raw-output))
@@ -100,8 +108,9 @@ For example:
                                    (dolist (handler (alist-get :error-handlers client))
                                      (funcall handler api-error)))))))
     (let ((process (make-process
-                    :name (format "acp-client(%s)" command)
-                    :command (cons command command-params)
+                    :name (format "acp-client(%s)" (map-elt client :command))
+                    :command (cons (map-elt client :command)
+                                   (map-elt client :command-params))
                     :stderr stderr-proc
                     :connection-type 'pipe
                     :filter (lambda (_proc input)
@@ -124,8 +133,7 @@ For example:
                     :sentinel (lambda (_process _event)
                                 (when (process-live-p stderr-proc)
                                   (delete-process stderr-proc))))))
-      (setq client (acp--make-client :process process))
-      client)))
+      (map-put! client :process process))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification)
   "Subscribe to incoming CLIENT notifications.
@@ -184,6 +192,8 @@ When non-nil SYNC, send request synchronously."
     (error ":client is required"))
   (unless request
     (error ":request is required"))
+  (unless (acp--client-started-p client)
+    (acp--start-client :client client))
   (let* ((method (map-elt request :method))
          (params (map-elt request :params))
          (proc (map-elt client :process))
