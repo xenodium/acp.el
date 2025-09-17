@@ -92,7 +92,7 @@ https://www.anthropic.com/claude-code"
   (unless (map-elt client :command)
     (error ":command is required"))
   (unless (executable-find (map-elt client :command))
-    (error "%s not found.  Please install" (map-elt client :command)))
+    (error "%s not found.  Please install it" (map-elt client :command)))
   (when (acp--client-started-p client)
     (error "Client already started"))
   (let* ((pending-input "")
