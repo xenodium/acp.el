@@ -105,7 +105,7 @@ https://www.anthropic.com/claude-code"
                                  (acp--log "STDERR" "%s" (string-trim raw-output))
                                  (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
                                    (acp--log "API-ERROR" "%s" (string-trim raw-output))
-                                   (dolist (handler (alist-get :error-handlers client))
+                                   (dolist (handler (map-elt client :error-handlers))
                                      (funcall handler api-error)))))))
     (let ((process (make-process
                     :name (format "acp-client(%s)" (map-elt client :command))
@@ -433,10 +433,10 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
       (goto-char (point-max))
       (let* ((timestamp (format-time-string "%H:%M:%S.%3N"))
              (direction (if (eq kind 'incoming) "←" "→"))
-             (method (alist-get 'method object))
-             (id (alist-get 'id object))
-             (has-result (alist-get 'result object))
-             (has-error (alist-get 'error object))
+             (method (map-elt object 'method))
+             (id (map-elt object 'id))
+             (has-result (map-elt object 'result))
+             (has-error (map-elt object 'error))
              (msg-type (cond
                         ((and id (or has-result has-error)) "response")
                         ((and method id) "request")
