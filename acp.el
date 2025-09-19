@@ -521,6 +521,8 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
                                 (propertize direction 'face font-lock-string-face)
                                 msg-type
                                 (propertize method-info 'face font-lock-function-name-face)))
+             (full-object `((:kind . ,kind)
+                            (:object . ,object)))
              (action-keymap (let ((map (make-sparse-keymap)))
                               (define-key map [mouse-1]
                                           (lambda ()
@@ -536,6 +538,9 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
                              `(keymap ,action-keymap
                                       json-object ,object)
                              line-text)
+        (add-text-properties 0 (length line-text)
+                             `(acp-object ,full-object)
+                             line-text)
         (insert line-text)))
     ;; Keep buffer size manageable (last 1000 lines)
     (when (> (count-lines (point-min) (point-max)) 1000)
@@ -545,7 +550,7 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
 
 (defun acp--show-json-object (object)
   "Display the JSON OBJECT in a pretty-printed buffer."
-  (let ((json-buffer (get-buffer-create "*json object*")))
+  (let ((json-buffer (get-buffer-create "*acp json object*")))
     (with-current-buffer json-buffer
       (read-only-mode -1)
       (erase-buffer)
