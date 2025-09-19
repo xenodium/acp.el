@@ -1,36 +1,39 @@
 ;;; acp-fakes.el --- A fake ACP client -*- lexical-binding: t; -*-
 
 (require 'acp)
+(require 'map)
 (eval-when-compile (require 'cl))
 
 (defun acp-fakes-make-client (messages)
   "Create a fake ACP client that responds using traffic MESSAGES.
 Each message is an alist with :kind :object and :json values."
-  (let ((message-queue (copy-sequence messages))
-        (pending-requests (make-hash-table :test 'equal)))
-    (acp-make-client
-     :command "cat"
-     :command-params nil
-     :environment-variables nil
-     :request-sender (cl-function (lambda (&key client request on-success on-failure _sync)
-                                    (acp-fakes--request-sender
-                                     :client client
-                                     :request request
-                                     :on-success on-success
-                                     :on-failure on-failure
-                                     :pending-requests pending-requests
-                                     :message-queue message-queue)))
-     :response-sender
-     (cl-function (lambda (&key _client response)
-                    (acp-fakes--response-sender :response response)))
-     :request-resolver
-     (cl-function (lambda (&key client id)
-                    (acp-fakes--request-resolver :client client :id id))))))
+  (let ((client (acp-make-client
+                 :command "cat"
+                 :command-params nil
+                 :environment-variables nil
+                 :request-sender (cl-function (lambda (&key client request on-success on-failure _sync)
+                                                (acp-fakes--request-sender
+                                                 :client client
+                                                 :request request
+                                                 :on-success on-success
+                                                 :on-failure on-failure)))
+                 :response-sender
+                 (cl-function (lambda (&key _client response)
+                                (acp-fakes--response-sender :response response)))
+                 :request-resolver
+                 (cl-function (lambda (&key client id)
+                                (acp-fakes--request-resolver :client client :id id))))))
+    (setf (map-elt client :message-queue) (copy-sequence messages))
+    (setf (map-elt client :pending-requests) '())
+    client))
 
-(cl-defun acp-fakes--request-sender (&key client _request on-success on-failure pending-requests message-queue)
-  (let* ((request-id (1+ (map-elt client :request-id))))
-    (map-put! client :request-id request-id)
-    (puthash request-id (list on-success on-failure) pending-requests)
+(cl-defun acp-fakes--request-sender (&key client _request on-success on-failure)
+  (let* ((request-id (1+ (map-elt client :request-id)))
+         (message-queue (map-elt client :message-queue))
+         (pending-requests (map-elt client :pending-requests)))
+    (setf (map-elt client :request-id) request-id)
+    (setf (map-elt pending-requests request-id) (list on-success on-failure))
+    (setf (map-elt client :pending-requests) pending-requests)
     (let ((response-message (seq-find
                              (lambda (msg)
                                (and (eq (map-elt msg :kind) 'incoming)
@@ -38,16 +41,18 @@ Each message is an alist with :kind :object and :json values."
                                            request-id)))
                              message-queue)))
       (when response-message
-        (setq message-queue (seq-remove (lambda (msg)
-                                          (eq msg response-message))
-                                        message-queue))
+        (setf (map-elt client :message-queue)
+              (seq-remove (lambda (msg)
+                            (eq msg response-message))
+                          message-queue))
         (let* ((response-obj (map-elt response-message :object))
-               (callbacks (gethash request-id pending-requests))
+               (callbacks (map-elt pending-requests request-id))
                (on-success (nth 0 callbacks))
                (on-failure (nth 1 callbacks))
                (result (map-elt response-obj 'result))
                (error (map-elt response-obj 'error)))
-          (remhash request-id pending-requests)
+          (setf (map-elt client :pending-requests)
+                (map-delete pending-requests request-id))
           (cond
            ((and result on-success)
             (funcall on-success result)
