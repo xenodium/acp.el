@@ -43,8 +43,19 @@
 
 (defvar acp-logging-enabled nil)
 
-(cl-defun acp-make-client (&key command command-params environment-variables)
-  "Make an internal client with COMMAND COMMAND-PARAMS and ENVIRONMENT-VARIABLES."
+(cl-defun acp-make-client (&key command command-params environment-variables
+                                request-sender request-resolver response-sender)
+  "Create an ACP client.
+
+COMMAND: Binary or command line utility to invoke.
+COMMAND-PARAMS: Command params.
+ENVIRONMENT-VARIABLES: In the form `(\"VAR=foo\").
+
+The following are only neede if you'd like to mock clients.
+
+REQUEST-SENDER: Sends requests.
+REQUEST-RESOLVER: Resolves incoming requests to handler.
+RESPONSE-SENDER: Sends responses."
   (unless command
     (error ":command is required"))
   (unless (executable-find command)
@@ -57,7 +68,13 @@
         (cons :request-id 0)
         (cons :notification-handlers ())
         (cons :request-handlers ())
-        (cons :error-handlers ())))
+        (cons :error-handlers ())
+        (cons :request-sender (or request-sender
+                                  #'acp--request-sender))
+        (cons :request-resolver (or request-resolver
+                                    #'acp--request-resolver))
+        (cons :response-sender (or response-sender
+                                   #'acp--response-sender))))
 
 (cl-defun acp-make-gemini-client (&key api-key)
   "Create a Gemini ACP client with API-KEY.
@@ -194,6 +211,26 @@ When non-nil SYNC, send request synchronously."
     (error ":request is required"))
   (unless (acp--client-started-p client)
     (acp--start-client :client client))
+  (funcall (map-elt client :request-sender)
+           :client client
+           :request request
+           :on-success on-success
+           :on-failure on-failure
+           :sync sync))
+
+(cl-defun acp--request-sender (&key client request on-success on-failure sync)
+  "Send REQUEST from CLIENT.
+
+ON-SUCCESS is of the form (lambda (response)).
+ON-FAILURE is of the form (lambda (error)).
+
+When non-nil SYNC, send request synchronously."
+  (unless client
+    (error ":client is required"))
+  (unless request
+    (error ":request is required"))
+  (unless (acp--client-started-p client)
+    (acp--start-client :client client))
   (let* ((method (map-elt request :method))
          (params (map-elt request :params))
          (proc (map-elt client :process))
@@ -236,6 +273,16 @@ When non-nil SYNC, send request synchronously."
     (error ":client is required"))
   (unless response
     (error ":response is required"))
+  (funcall (map-elt client :response-sender)
+           :client client
+           :response response))
+
+(cl-defun acp--response-sender (&key client response)
+  "Send a request RESPONSE from CLIENT."
+  (unless client
+    (error ":client is required"))
+  (unless response
+    (error ":response is required"))
   (let* ((request-id (map-elt response :request-id))
          (result-data (map-elt response :result)))
     (map-put! client :request-id (or request-id
@@ -271,7 +318,7 @@ See response https://agentclientprotocol.com/protocol/schema#initializeresponse.
                                                                   :false))))))))))
 
 (cl-defun acp-make-authenticate-request (&key method-id)
-"Instantiate an \"authenticate\" request.
+  "Instantiate an \"authenticate\" request.
 
 See request's METHOD-ID usage at:
 https://agentclientprotocol.com/protocol/schema#authenticaterequest."
@@ -351,44 +398,64 @@ ON-REQUEST is of the form (lambda (request))."
   (when-let ((logging t))
     (acp--log "INCOMING JSON" "%s" json)
     (let ((object (json-parse-string json :object-type 'alist)))
-      (acp--log-traffic 'incoming object)
-      (let-alist object
-        (cond
-         ;; Method request result (success)
-         ((and .result .id
-               (map-contains-key (map-elt client :pending-requests) .id)
-               (equal .method
-                      (map-nested-elt client `(:pending-requests ,.id :request :method))))
-          (acp--log nil "↳ Routing as response (result)")
-          (let ((on-success (map-nested-elt (map-elt client :pending-requests)
-                                            (list .id :on-success))))
-            (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
-            (if on-success
-                (funcall on-success .result)
-              (acp--log nil "Unhandled result:\n\n%s" json))))
-         ;; Method request result (failure)
-         ((and .error .id
-               (map-contains-key (map-elt client :pending-requests) .id))
-          (acp--log nil "↳ Routing as response (result)")
-          (let ((on-failure (map-nested-elt (map-elt client :pending-requests)
-                                            (list .id :on-failure))))
-            (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
-            (if on-failure
-                (if (>= (cdr (func-arity on-failure)) 2)
-                    (funcall on-failure .error json)
-                  (funcall on-failure .error))
-              (acp--log nil "Unhandled error:\n\n%s" json))))
-         ;; Incoming method request
-         ((and .method .id)
-          (acp--log nil "↳ Routing as incoming request")
-          (when on-request
-            (funcall on-request object)))
-         ((not .id)
-          (acp--log nil "↳ Routing as notification")
-          (when on-notification
-            (funcall on-notification object)))
-         (t
-          (acp--log nil "↳ Routing undefined (could not recognize)")))))))
+      (acp--route-incoming-object
+       :client client
+       :json json
+       :object object
+       :on-notification on-notification
+       :on-request on-request))))
+
+(cl-defun acp--request-resolver (&key client id)
+  "Resolve CLIENT request with ID to a handler."
+  (map-nested-elt client `(:pending-requests ,id)))
+
+(cl-defun acp--route-incoming-object (&key client json object on-notification on-request)
+  "Parse CLIENT's incoming JSON/OBJECT event and route as notification or request.
+
+ON-NOTIFICATION is of the form (lambda (notification))
+ON-REQUEST is of the form (lambda (request))."
+  (unless object
+    (error ":object is required"))
+  (unless on-notification
+    (error ":on-notification is required"))
+  (unless on-request
+    (error ":on-request is required"))
+  (acp--log-traffic 'incoming object)
+  (let-alist object
+    (cond
+     ;; Method request result (success)
+     ((and .result .id
+           (map-elt (funcall (map-elt client :request-resolver) :client client :id .id) :on-success))
+      (acp--log nil "↳ Routing as response (result)")
+      (let ((on-success (map-elt (funcall (map-elt client :request-resolver) :client client :id .id) :on-success)))
+        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
+        (if on-success
+            (funcall on-success .result)
+          ;; TODO: Consolidate serialization.
+          (acp--log nil "Unhandled result:\n\n%s" (or json (json-serialize object))))))
+     ;; Method request result (failure)
+     ((and .error .id
+           (map-contains-key (map-elt client :pending-requests) .id))
+      (acp--log nil "↳ Routing as response (result)")
+      (let ((on-failure (map-nested-elt (map-elt client :pending-requests)
+                                        (list .id :on-failure))))
+        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
+        (if on-failure
+            (if (>= (cdr (func-arity on-failure)) 2)
+                (funcall on-failure .error (or json (json-serialize object)))
+              (funcall on-failure .error))
+          (acp--log nil "Unhandled error:\n\n%s" (or json (json-serialize object))))))
+     ;; Incoming method request
+     ((and .method .id)
+      (acp--log nil "↳ Routing as incoming request")
+      (when on-request
+        (funcall on-request object)))
+     ((not .id)
+      (acp--log nil "↳ Routing as notification")
+      (when on-notification
+        (funcall on-notification object)))
+     (t
+      (acp--log nil "↳ Routing undefined (could not recognize)")))))
 
 (cl-defun acp--parse-stderr-api-error (raw-output)
   "Parse RAW-OUTPUT, typically from stderr.
@@ -419,16 +486,17 @@ Returns non-nil if error was parseable."
 (defun acp--json-pretty-print (json)
   "Return a pretty-printed JSON string."
   (if acp-logging-enabled
-    (with-temp-buffer
-      (insert json)
-      (json-pretty-print (point-min) (point-max))
-      (buffer-string))
+      (with-temp-buffer
+        (insert json)
+        (json-pretty-print (point-min) (point-max))
+        (buffer-string))
     json))
 
 (defun acp--log-traffic (kind object)
   "Log traffic message to \"*acp traffic*\" buffer.
 KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
-  (let ((traffic-buffer (get-buffer-create "*acp traffic*")))
+  (let ((inhibit-read-only t)
+        (traffic-buffer (get-buffer-create "*acp traffic*")))
     (with-current-buffer traffic-buffer
       (goto-char (point-max))
       (let* ((timestamp (format-time-string "%H:%M:%S.%3N"))
