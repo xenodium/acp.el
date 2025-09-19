@@ -422,40 +422,46 @@ ON-REQUEST is of the form (lambda (request))."
     (error ":on-request is required"))
   (acp--log-traffic 'incoming object)
   (let-alist object
-    (cond
+    (or
      ;; Method request result (success)
-     ((and .result .id
-           (map-elt (funcall (map-elt client :request-resolver) :client client :id .id) :on-success))
-      (acp--log nil "↳ Routing as response (result)")
-      (let ((on-success (map-elt (funcall (map-elt client :request-resolver) :client client :id .id) :on-success)))
-        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
-        (if on-success
-            (funcall on-success .result)
-          ;; TODO: Consolidate serialization.
-          (acp--log nil "Unhandled result:\n\n%s" (or json (json-serialize object))))))
+     (when-let ((incoming-response (and .result .id
+                                        (funcall (map-elt client :request-resolver)
+                                                 :client client :id .id))))
+       (acp--log nil "↳ Routing as response (result)")
+       (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
+       (if (map-elt incoming-response :on-success)
+           (funcall (map-elt incoming-response :on-success) .result)
+         ;; TODO: Consolidate serialization.
+         (acp--log nil "Unhandled result:\n\n%s" (or json (json-serialize object)))))
+
      ;; Method request result (failure)
-     ((and .error .id
-           (map-contains-key (map-elt client :pending-requests) .id))
-      (acp--log nil "↳ Routing as response (result)")
-      (let ((on-failure (map-nested-elt (map-elt client :pending-requests)
-                                        (list .id :on-failure))))
-        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
-        (if on-failure
-            (if (>= (cdr (func-arity on-failure)) 2)
-                (funcall on-failure .error (or json (json-serialize object)))
-              (funcall on-failure .error))
-          (acp--log nil "Unhandled error:\n\n%s" (or json (json-serialize object))))))
+     (when-let ((incoming-response (and .error .id
+                                        (funcall (map-elt client :request-resolver)
+                                                 :client client :id .id))))
+       (acp--log nil "↳ Routing as response (error)")
+       (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
+       (if (map-elt incoming-response :on-failure)
+           (if (>= (cdr (func-arity (map-elt incoming-response :on-failure))) 2)
+               (funcall (map-elt incoming-response :on-failure)
+                        .error (or json (json-serialize object)))
+             (funcall (map-elt incoming-response :on-failure) .error))
+         (acp--log nil "Unhandled error:\n\n%s" (or json (json-serialize object)))))
+
      ;; Incoming method request
-     ((and .method .id)
-      (acp--log nil "↳ Routing as incoming request")
-      (when on-request
-        (funcall on-request object)))
-     ((not .id)
-      (acp--log nil "↳ Routing as notification")
-      (when on-notification
-        (funcall on-notification object)))
-     (t
-      (acp--log nil "↳ Routing undefined (could not recognize)")))))
+     (when (and .method .id)
+       (acp--log nil "↳ Routing as incoming request")
+       (when on-request
+         (funcall on-request object)))
+
+     ;; Incoming notification
+     (when (not .id)
+       (acp--log nil "↳ Routing as notification")
+       (when on-notification
+         (funcall on-notification object)))
+
+     ;; Unrecognized
+     (when t
+       (acp--log nil "↳ Routing undefined (could not recognize)\n\n%s" object)))))
 
 (cl-defun acp--parse-stderr-api-error (raw-output)
   "Parse RAW-OUTPUT, typically from stderr.
