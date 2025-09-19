@@ -499,6 +499,9 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
       (let* ((object (map-elt message :object))
              (timestamp (format-time-string "%H:%M:%S.%3N"))
              (direction (if (eq kind 'incoming) "←" "→"))
+             (direction-face (if (eq kind 'incoming)
+                                 'success
+                               'error))
              (method (map-elt object 'method))
              (id (map-elt object 'id))
              (has-result (map-elt object 'result))
@@ -519,7 +522,7 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
                               "unknown"))
              (line-text (format "%s %s %-12s %s\n"
                                 timestamp
-                                (propertize direction 'face font-lock-string-face)
+                                (propertize direction 'face direction-face)
                                 msg-type
                                 (propertize method-info 'face font-lock-function-name-face)))
              (full-object `((:kind . ,kind)
