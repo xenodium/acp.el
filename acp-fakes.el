@@ -126,7 +126,6 @@ Each message is an alist with :kind :object and :json values."
   (let ((objects (apc-fakes--traffic-objects)))
     (with-current-buffer (or buffer (get-buffer-create "*acp serialized traffic*"))
       (erase-buffer)
-      (let ((print-circle t)
-            (pp-use-max-width t))
+      (let ((print-circle t))
         (pp objects (current-buffer)))
       (pop-to-buffer (current-buffer)))))
