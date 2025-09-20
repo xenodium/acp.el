@@ -59,7 +59,7 @@ Eeach message is of the form:
                                           :request-id request-id)))
       (cl-flet ((acp--log (&rest _) (ignore))
                 (acp--log-traffic (&rest _) (ignore)))
-        (dolist (msg (map-elt client :message-queue))
+        (dolist (msg related-incoming-traffic)
           (acp--route-incoming-message
            :message msg
            :client client
