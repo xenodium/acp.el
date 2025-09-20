@@ -264,7 +264,7 @@ When non-nil SYNC, send request synchronously."
                         done 'error))))
     (acp--log "OUTGOING OBJECT" "%s" request)
     (let ((json (concat (json-serialize request) "\n")))
-      (acp--log-traffic 'outgoing (acp--make-message :object request :json json))
+      (acp--log-traffic 'outgoing 'request (acp--make-message :object request :json json))
       (process-send-string proc json))
     (when sync
       (while (not done)
@@ -298,7 +298,7 @@ When non-nil SYNC, send request synchronously."
                        (id . ,request-id)
                        (result . ,result-data))))
       (let ((json (concat (json-serialize response) "\n")))
-        (acp--log-traffic 'outgoing (acp--make-message :object response :json json))
+        (acp--log-traffic 'outgoing 'response (acp--make-message :object response :json json))
         (process-send-string proc json)))))
 
 (cl-defun acp-make-initialize-request (&key protocol-version
@@ -408,7 +408,6 @@ ON-REQUEST is of the form (lambda (request))."
     (error ":on-notification is required"))
   (unless on-request
     (error ":on-request is required"))
-  (acp--log-traffic 'incoming message)
   (let-alist (map-elt message :object)
     (or
      ;; Method request result (success)
@@ -416,18 +415,21 @@ ON-REQUEST is of the form (lambda (request))."
                                         (funcall (map-elt client :request-resolver)
                                                  :client client :id .id))))
        (acp--log nil "↳ Routing as response (result)")
+       (acp--log-traffic 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt incoming-response :on-success)
            (funcall (map-elt incoming-response :on-success) .result)
          ;; TODO: Consolidate serialization.
          (acp--log nil "Unhandled result:\n\n%s" (or (map-elt message :object)
-                                                     (map-elt message :json)))))
+                                                     (map-elt message :json))))
+       t)
 
      ;; Method request result (failure)
      (when-let ((incoming-response (and .error .id
                                         (funcall (map-elt client :request-resolver)
                                                  :client client :id .id))))
        (acp--log nil "↳ Routing as response (error)")
+       (acp--log-traffic 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt incoming-response :on-failure)
            (if (>= (cdr (func-arity (map-elt incoming-response :on-failure))) 2)
@@ -436,23 +438,29 @@ ON-REQUEST is of the form (lambda (request))."
                                    (map-elt message :json)))
              (funcall (map-elt incoming-response :on-failure) .error))
          (acp--log nil "Unhandled error:\n\n%s" (or (map-elt message :object)
-                                                    (map-elt message :json)))))
+                                                    (map-elt message :json))))
+       t)
 
      ;; Incoming method request
      (when (and .method .id)
        (acp--log nil "↳ Routing as incoming request")
+       (acp--log-traffic 'incoming 'request message)
        (when on-request
-         (funcall on-request (map-elt message :object))))
+         (funcall on-request (map-elt message :object)))
+       t)
 
      ;; Incoming notification
      (when (not .id)
        (acp--log nil "↳ Routing as notification")
+       (acp--log-traffic 'incoming 'notification message)
        (when on-notification
-         (funcall on-notification (map-elt message :object))))
+         (funcall on-notification (map-elt message :object)))
+       t)
 
      ;; Unrecognized
      (when t
-       (acp--log nil "↳ Routing undefined (could not recognize)\n\n%s" (map-elt message :object))))))
+       (acp--log nil "↳ Routing undefined (could not recognize)\n\n%s" (map-elt message :object))
+       (acp--log-traffic 'incoming 'unknown message)))))
 
 (cl-defun acp--parse-stderr-api-error (raw-output)
   "Parse RAW-OUTPUT, typically from stderr.
@@ -489,7 +497,7 @@ Returns non-nil if error was parseable."
         (buffer-string))
     json))
 
-(defun acp--log-traffic (kind message)
+(defun acp--log-traffic (direction kind message)
   "Log traffic MESSAGE to \"*acp traffic*\" buffer.
 KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
   (let ((inhibit-read-only t)
@@ -498,22 +506,9 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
       (goto-char (point-max))
       (let* ((object (map-elt message :object))
              (timestamp (format-time-string "%H:%M:%S.%3N"))
-             (direction (if (eq kind 'incoming) "←" "→"))
-             (direction-face (if (eq kind 'incoming)
-                                 'success
-                               'error))
              (method (map-elt object 'method))
-             (id (map-elt object 'id))
              (has-result (map-elt object 'result))
              (has-error (map-elt object 'error))
-             (msg-type (cond
-                        ((and id (or has-result has-error))
-                         "response")
-                        ((and method id)
-                         "request")
-                        ((and method (not id))
-                         "notification")
-                        (t "unknown")))
              (method-info (or method
                               (when has-result
                                 "result")
@@ -522,10 +517,14 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
                               "unknown"))
              (line-text (format "%s %s %-12s %s\n"
                                 timestamp
-                                (propertize direction 'face direction-face)
-                                msg-type
+                                (propertize (if (eq direction 'incoming) "←" "→")
+                                            'face (if (eq direction 'incoming)
+                                                      'success
+                                                    'error))
+                                kind
                                 (propertize method-info 'face font-lock-function-name-face)))
-             (full-object `((:kind . ,kind)
+             (full-object `((:direction . ,direction)
+                            (:kind . ,kind)
                             (:object . ,object)))
              (action-keymap (let ((map (make-sparse-keymap)))
                               (define-key map [mouse-1]
