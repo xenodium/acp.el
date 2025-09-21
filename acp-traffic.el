@@ -41,7 +41,7 @@
 (defvar acp-traffic-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
-    (define-key map (kbd "C-x C-s") #'acp-traffic-save)
+    (define-key map (kbd "C-x C-s") #'acp-traffic-save-to)
     (define-key map "n" #'acp-traffic-next-entry)
     (define-key map "p" #'acp-traffic-previous-entry)
     (define-key map (kbd "RET") #'acp-traffic-display-entry)
@@ -49,10 +49,40 @@
     map)
   "Keymap for ACP-Traffic mode.")
 
-(defun acp-traffic-save ()
-  "Handle save command in ACP-Traffic mode."
+(defun acp-traffic-save-to ()
+  "Save traffic objects to a file."
   (interactive)
-  (error "FIXME"))
+  (unless (eq major-mode 'acp-traffic-mode)
+    (user-error "Not in a traffic buffer"))
+  (let* ((destination (read-file-name "Save traffic to: " nil "yolo.traffic"))
+         (objects (acp-traffic--objects)))
+    (when (or (not destination)
+              (string-empty-p (string-trim destination)))
+      (user-error "No destination file found"))
+    (with-temp-file destination
+      (erase-buffer)
+      (let ((print-circle t))
+        (pp objects (current-buffer))))
+    (message "Saved %s" destination)))
+
+(defun acp-traffic-open-file ()
+  "Select and open a traffic file."
+  (interactive)
+  (if-let* ((traffic-file (read-file-name "Open traffic file: " nil nil t))
+            (messages (with-temp-buffer
+                        (insert-file-contents traffic-file)
+                        (goto-char (point-min))
+                        (read (current-buffer))))
+            (buffer (get-buffer-create (format "*ACP traffic (%s)*" (file-name-nondirectory traffic-file)))))
+      (progn
+        (dolist (message messages)
+          (acp-traffic-log-traffic :buffer buffer
+                                   :direction (map-elt message :direction)
+                                   :kind (map-elt message :kind)
+                                   :message message))
+        (pop-to-buffer buffer))
+    messages
+    (error "No session messages found")))
 
 (defun acp-traffic-next-entry ()
   "Move to next traffic entry."
@@ -145,6 +175,20 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
       (goto-char (point-min))
       (forward-line 100)
       (delete-region (point-min) (point)))))
+
+(defun acp-traffic--objects ()
+  "Extract all the traffic objects from current traffic buffer."
+  (unless (eq major-mode 'acp-traffic-mode)
+    (user-error "Not in a traffic buffer"))
+  (save-excursion
+    (goto-char (point-min))
+    (let ((objects '()))
+      (while (not (eobp))
+        (let ((obj (get-text-property (point) 'acp-traffic-object)))
+          (when obj
+            (push obj objects)))
+        (forward-line 1))
+      (nreverse objects))))
 
 ;;;; Full traffic entry display
 

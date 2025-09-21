@@ -185,29 +185,6 @@ For incoming messages without an id, log them."
            (dolist (handler (map-elt client :request-handlers))
              (funcall handler request)))))))))
 
-
-(defun apc-fakes--traffic-objects (&optional buffer)
-  "Extract all the traffic objects from logs BUFFER."
-  (with-current-buffer (or buffer (get-buffer-create "*acp traffic*"))
-    (save-excursion
-      (goto-char (point-min))
-      (let ((objects '()))
-        (while (not (eobp))
-          (let ((obj (get-text-property (point) 'acp-object)))
-            (when obj
-              (push obj objects)))
-          (forward-line 1))
-        (nreverse objects)))))
-
-(defun apc-fakes--dump-traffic-objects (&optional buffer)
-  "Dump all the traffic objects into BUFFER."
-  (let ((objects (apc-fakes--traffic-objects)))
-    (with-current-buffer (or buffer (get-buffer-create "*acp serialized traffic*"))
-      (erase-buffer)
-      (let ((print-circle t))
-        (pp objects (current-buffer)))
-      (pop-to-buffer (current-buffer)))))
-
 (cl-defun acp-fakes--get-authenticate-request (&key messages)
   "Find the first authentication object in MESSAGES."
   (unless messages
