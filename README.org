@@ -113,7 +113,7 @@ Look out for =*acp log*= and =*acp traffic*= buffers.
 
 The =*acp traffic*= is particularly useful to inspecting incomng or outgoing traffic.
 
-[[file:traffic.png]]
+[[file:traffic.gif]]
 
 * APIs
 
