@@ -507,56 +507,9 @@ Returns non-nil if error was parseable."
   "Log CLIENT traffic MESSAGE to \"*acp traffic*\" buffer.
 KIND may be `request', `response', or `notification'.
 DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
-  (let ((inhibit-read-only t)
-        (traffic-buffer (acp-traffic-buffer :client client)))
-    (with-current-buffer traffic-buffer
-      (goto-char (point-max))
-      (let* ((object (map-elt message :object))
-             (timestamp (format-time-string "%H:%M:%S.%3N"))
-             (method (map-elt object 'method))
-             (has-result (map-elt object 'result))
-             (has-error (map-elt object 'error))
-             (method-info (or method
-                              (when has-result
-                                "result")
-                              (when has-error
-                                "error")
-                              "unknown"))
-             (line-text (format "%s %s %-12s %s\n"
-                                timestamp
-                                (propertize (if (eq direction 'incoming) "←" "→")
-                                            'face (if (eq direction 'incoming)
-                                                      'success
-                                                    'error))
-                                kind
-                                (propertize method-info 'face font-lock-function-name-face)))
-             (full-object `((:direction . ,direction)
-                            (:kind . ,kind)
-                            (:object . ,object)))
-             (action-keymap (let ((map (make-sparse-keymap)))
-                              (define-key map [mouse-1]
-                                          (lambda ()
-                                            (interactive)
-                                            (acp--show-json-object object)))
-                              (define-key map (kbd "RET")
-                                          (lambda ()
-                                            (interactive)
-                                            (acp--show-json-object object)))
-                              (define-key map [remap self-insert-command] 'ignore)
-                              map)))
-        (add-text-properties 0 (length line-text)
-                             `(keymap ,action-keymap
-                                      json-object ,object)
-                             line-text)
-        (add-text-properties 0 (length line-text)
-                             `(acp-object ,full-object)
-                             line-text)
-        (insert line-text)))
-    ;; Keep buffer size manageable (last 1000 lines)
-    (when (> (count-lines (point-min) (point-max)) 1000)
-      (goto-char (point-min))
-      (forward-line 100)
-      (delete-region (point-min) (point)))))
+  (acp-traffic-log-traffic
+   :buffer (acp-traffic-buffer :client client)
+   :direction direction :kind kind :message message))
 
 (defun acp--show-json-object (object)
   "Display OBJECT in a pretty-printed buffer."
@@ -585,9 +538,9 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
 
 (cl-defun acp-traffic-buffer (&key client)
   "Get CLIENT traffic buffer."
-  (get-buffer-create (format "*acp-(%s)-%s traffic*"
-                             (map-elt client :command)
-                             (map-elt client :instance-count))))
+  (acp-traffic-get-buffer :named (format "*acp-(%s)-%s traffic*"
+                                         (map-elt client :command)
+                                         (map-elt client :instance-count))))
 
 (defun acp--increment-instance-count ()
   "Increment variable `acp-instance-count'."
