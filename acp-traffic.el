@@ -35,12 +35,17 @@
 
 ;;; Code:
 
+(require 'hl-line)
+(require 'map)
+
 (defvar acp-traffic-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
     (define-key map (kbd "C-x C-s") #'acp-traffic-save)
     (define-key map "n" #'acp-traffic-next-entry)
     (define-key map "p" #'acp-traffic-previous-entry)
+    (define-key map (kbd "RET") #'acp-traffic-display-entry)
+    (define-key map [mouse-1] #'acp-traffic-display-entry)
     map)
   "Keymap for ACP-Traffic mode.")
 
@@ -52,12 +57,35 @@
 (defun acp-traffic-next-entry ()
   "Move to next traffic entry."
   (interactive)
-  (forward-line))
+  (forward-line)
+  (acp-traffic-display-entry))
 
 (defun acp-traffic-previous-entry ()
   "Move to previous traffic entry."
   (interactive)
-  (forward-line -1))
+  (forward-line -1)
+  (acp-traffic-display-entry))
+
+(defun acp-traffic-display-entry ()
+  "Display expanded entry at point."
+  (interactive)
+  (if-let ((objects (list (get-text-property (point) 'acp-traffic-object))))
+      (acp-traffic-display-objects objects)
+    (error "Nothing to view")))
+
+(defun apc-traffic-display-all-entries ()
+  "Display all entries expanded."
+  (interactive)
+  (unless (eq major-mode 'acp-traffic-mode)
+    (user-error "Not in a traffic buffer"))
+  (save-excursion
+    (goto-char (point-min))
+    (let ((objects '()))
+      (while (not (eobp))
+        (when-let ((object (get-text-property (point) 'acp-traffic-object)))
+          (push object objects))
+        (forward-line 1))
+      (acp-traffic-display-objects (nreverse objects)))))
 
 (cl-defun acp-traffic-get-buffer (&key named)
   "Get or create a buffer for ACP traffic.
@@ -74,7 +102,8 @@ NAMED is required name to create buffer if needed."
 (define-derived-mode acp-traffic-mode special-mode "ACP-traffic"
   "Major mode for ACP traffic monitoring."
   (setq buffer-read-only t)
-  (use-local-map acp-traffic-mode-map))
+  (use-local-map acp-traffic-mode-map)
+  (hl-line-mode +1))
 
 (cl-defun acp-traffic-log-traffic (&key buffer direction kind message)
   "Log MESSAGE to BUFFER.
@@ -106,21 +135,9 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
                                 (propertize method-info 'face font-lock-function-name-face)))
              (traffic-entry `((:direction . ,direction)
                               (:kind . ,kind)
-                              (:object . ,object)))
-             (action-keymap (let ((map (make-sparse-keymap)))
-                              (define-key map [mouse-1]
-                                          (lambda ()
-                                            (interactive)
-                                            (acp--show-json-object object)))
-                              (define-key map (kbd "RET")
-                                          (lambda ()
-                                            (interactive)
-                                            (acp--show-json-object object)))
-                              (define-key map [remap self-insert-command] 'ignore)
-                              map)))
+                              (:object . ,object))))
         (add-text-properties 0 (length line-text)
-                             `(keymap ,action-keymap
-                               acp-traffic-object ,traffic-entry)
+                             `(acp-traffic-object ,traffic-entry)
                              line-text)
         (insert line-text)))
     ;; Keep buffer size manageable (last 1000 lines)
@@ -128,6 +145,71 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
       (goto-char (point-min))
       (forward-line 100)
       (delete-region (point-min) (point)))))
+
+;;;; Full traffic entry display
+
+(defun acp-traffic-display-objects (objects)
+  "Display OBJECTS."
+  (with-current-buffer (get-buffer-create "*ACP traffic entry*")
+    (erase-buffer)
+    (dolist (object objects)
+      (acp-traffic-display-objects-helper object 0)
+      (insert "\n"))
+    (goto-char (point-min))
+    (display-buffer (current-buffer))))
+
+(defun acp-traffic-display-objects-helper (object indent)
+  "Display OBJECT with INDENT."
+  (cond
+   ((and (listp object) (consp (car object)) (symbolp (caar object)))
+    (let ((max-key-width (acp-traffic-display-max-key-width object)))
+      (map-do (lambda (key value)
+                (insert (make-string indent ?\s))
+                (let ((label (symbol-name key)))
+                  (insert (propertize label 'face 'font-lock-variable-name-face))
+                  (cond
+                   ((or (and (listp value) (listp (car value)))
+                        (vectorp value))
+                    (insert "\n")
+                    (acp-traffic-display-objects-helper value (+ indent max-key-width 1)))
+                   (t
+                    (insert (make-string (- max-key-width (length label)) ?\s))
+                    (insert (format " %s\n" (acp-traffic-display-format-value value)))))))
+              object)))
+   ((listp object)
+    (dolist (item object)
+      (acp-traffic-display-objects-helper item indent)))
+   ((vectorp object)
+    (seq-do-indexed (lambda (item idx)
+                      (acp-traffic-display-objects-helper item indent)
+                      (when (< idx (1- (length object)))
+                        (insert "\n")))
+                    object))))
+
+(defun acp-traffic-display-max-key-width (alist)
+  "Return longest key width in ALIST."
+  (let ((max-width 0))
+    (map-do (lambda (key _value)
+              (let ((key-len (length (symbol-name key))))
+                (when (> key-len max-width)
+                  (setq max-width key-len))))
+            alist)
+    max-width))
+
+(defun acp-traffic-display-format-value (value)
+  "Format display of VALUE."
+  (cond
+   ((stringp value)
+    ;; TODO: Should it cap string length?
+    (if nil ;;(> (length value) 100)
+        (concat (substring value 0 100) "...")
+      value))
+   ((numberp value) (format "%s" value))
+   ((eq value :false) ":false")
+   ((eq value :null) ":null")
+   ((eq value t) "t")
+   ((symbolp value) (symbol-name value))
+   (t "")))
 
 (provide 'acp-traffic)
 
