@@ -43,6 +43,8 @@
 
 (defvar acp-logging-enabled nil)
 
+(defvar acp-instance-count 0)
+
 (cl-defun acp-make-client (&key command command-params environment-variables
                                 request-sender request-resolver response-sender)
   "Create an ACP client.
@@ -60,7 +62,8 @@ RESPONSE-SENDER: Sends responses."
     (error ":command is required"))
   (unless (executable-find command)
     (error "%s not found.  Please install" command))
-  (list (cons :process nil)
+  (list (cons :instance-count (acp--increment-instance-count))
+        (cons :process nil)
         (cons :command command)
         (cons :command-params command-params)
         (cons :environment-variables environment-variables)
@@ -69,12 +72,9 @@ RESPONSE-SENDER: Sends responses."
         (cons :notification-handlers ())
         (cons :request-handlers ())
         (cons :error-handlers ())
-        (cons :request-sender (or request-sender
-                                  #'acp--request-sender))
-        (cons :request-resolver (or request-resolver
-                                    #'acp--request-resolver))
-        (cons :response-sender (or response-sender
-                                   #'acp--response-sender))))
+        (cons :request-sender (or request-sender #'acp--request-sender))
+        (cons :request-resolver (or request-resolver #'acp--request-resolver))
+        (cons :response-sender (or response-sender #'acp--response-sender))))
 
 (cl-defun acp-make-gemini-client (&key api-key)
   "Create a Gemini ACP client with API-KEY.
@@ -116,30 +116,34 @@ https://www.anthropic.com/claude-code"
          (process-environment (append (map-elt client :environment-variables)
                                       process-environment))
          (stderr-proc (make-pipe-process
-                       :name (format "acp-client-stderr(%s)" (map-elt client :command))
+                       :name (format "acp-client-stderr(%s)-%s"
+                                     (map-elt client :command)
+                                     (map-elt client :instance-count))
                        :buffer nil
                        :filter (lambda (_process raw-output)
-                                 (acp--log "STDERR" "%s" (string-trim raw-output))
+                                 (acp--log client "STDERR" "%s" (string-trim raw-output))
                                  (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
-                                   (acp--log "API-ERROR" "%s" (string-trim raw-output))
+                                   (acp--log client "API-ERROR" "%s" (string-trim raw-output))
                                    (dolist (handler (map-elt client :error-handlers))
                                      (funcall handler api-error)))))))
     (let ((process (make-process
-                    :name (format "acp-client(%s)" (map-elt client :command))
+                    :name (format "acp-client(%s)-%s"
+                                  (map-elt client :command)
+                                  (map-elt client :instance-count))
                     :command (cons (map-elt client :command)
                                    (map-elt client :command-params))
                     :stderr stderr-proc
                     :connection-type 'pipe
                     :filter (lambda (_proc input)
-                              (acp--log "INCOMING TEXT" "%s" input)
+                              (acp--log client "INCOMING TEXT" "%s" input)
                               (setq pending-input (concat pending-input input))
                               (while (string-match "\\(.*\\)\n" pending-input)
-                                (acp--log "INCOMING LINE" "%s" (match-string 1 pending-input))
+                                (acp--log client "INCOMING LINE" "%s" (match-string 1 pending-input))
                                 (when-let* ((json (match-string 1 pending-input))
                                             (object (condition-case nil
                                                         (json-parse-string json :object-type 'alist)
                                                       (error
-                                                       (acp--log "JSON PARSE ERROR" "Invalid JSON: %s" json)
+                                                       (acp--log client "JSON PARSE ERROR" "Invalid JSON: %s" json)
                                                        nil))))
                                   (setq pending-input (substring pending-input (match-end 0)))
                                   (acp--route-incoming-message
@@ -202,7 +206,9 @@ Note: These are agent process errors.
   (unless client
     (error ":client is required"))
   (when (process-live-p (map-elt client :process))
-    (delete-process (map-elt client :process))))
+    (delete-process (map-elt client :process)))
+  (kill-buffer (acp-logs-buffer :client client))
+  (kill-buffer (acp-traffic-buffer :client client)))
 
 (cl-defun acp-send-request (&key client request on-success on-failure sync)
   "Send REQUEST from CLIENT.
@@ -262,9 +268,9 @@ When non-nil SYNC, send request synchronously."
                 (lambda (data)
                   (setq result data
                         done 'error))))
-    (acp--log "OUTGOING OBJECT" "%s" request)
+    (acp--log client "OUTGOING OBJECT" "%s" request)
     (let ((json (concat (json-serialize request) "\n")))
-      (acp--log-traffic 'outgoing 'request (acp--make-message :object request :json json))
+      (acp--log-traffic client 'outgoing 'request (acp--make-message :object request :json json))
       (process-send-string proc json))
     (when sync
       (while (not done)
@@ -298,7 +304,7 @@ When non-nil SYNC, send request synchronously."
                        (id . ,request-id)
                        (result . ,result-data))))
       (let ((json (concat (json-serialize response) "\n")))
-        (acp--log-traffic 'outgoing 'response (acp--make-message :object response :json json))
+        (acp--log-traffic client 'outgoing 'response (acp--make-message :object response :json json))
         (process-send-string proc json)))))
 
 (cl-defun acp-make-initialize-request (&key protocol-version
@@ -414,22 +420,22 @@ ON-REQUEST is of the form (lambda (request))."
      (when-let ((incoming-response (and .result .id
                                         (funcall (map-elt client :request-resolver)
                                                  :client client :id .id))))
-       (acp--log nil "↳ Routing as response (result)")
-       (acp--log-traffic 'incoming 'response message)
+       (acp--log client nil "↳ Routing as response (result)")
+       (acp--log-traffic client 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt incoming-response :on-success)
            (funcall (map-elt incoming-response :on-success) .result)
          ;; TODO: Consolidate serialization.
-         (acp--log nil "Unhandled result:\n\n%s" (or (map-elt message :object)
-                                                     (map-elt message :json))))
+         (acp--log client nil "Unhandled result:\n\n%s" (or (map-elt message :object)
+                                                            (map-elt message :json))))
        t)
 
      ;; Method request result (failure)
      (when-let ((incoming-response (and .error .id
                                         (funcall (map-elt client :request-resolver)
                                                  :client client :id .id))))
-       (acp--log nil "↳ Routing as response (error)")
-       (acp--log-traffic 'incoming 'response message)
+       (acp--log client nil "↳ Routing as response (error)")
+       (acp--log-traffic client 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt incoming-response :on-failure)
            (if (>= (cdr (func-arity (map-elt incoming-response :on-failure))) 2)
@@ -437,30 +443,30 @@ ON-REQUEST is of the form (lambda (request))."
                         .error (or (map-elt message :object)
                                    (map-elt message :json)))
              (funcall (map-elt incoming-response :on-failure) .error))
-         (acp--log nil "Unhandled error:\n\n%s" (or (map-elt message :object)
-                                                    (map-elt message :json))))
+         (acp--log client nil "Unhandled error:\n\n%s" (or (map-elt message :object)
+                                                           (map-elt message :json))))
        t)
 
      ;; Incoming method request
      (when (and .method .id)
-       (acp--log nil "↳ Routing as incoming request")
-       (acp--log-traffic 'incoming 'request message)
+       (acp--log client nil "↳ Routing as incoming request")
+       (acp--log-traffic client 'incoming 'request message)
        (when on-request
          (funcall on-request (map-elt message :object)))
        t)
 
      ;; Incoming notification
      (when (not .id)
-       (acp--log nil "↳ Routing as notification")
-       (acp--log-traffic 'incoming 'notification message)
+       (acp--log client nil "↳ Routing as notification")
+       (acp--log-traffic client 'incoming 'notification message)
        (when on-notification
          (funcall on-notification (map-elt message :object)))
        t)
 
      ;; Unrecognized
      (when t
-       (acp--log nil "↳ Routing undefined (could not recognize)\n\n%s" (map-elt message :object))
-       (acp--log-traffic 'incoming 'unknown message)))))
+       (acp--log client nil "↳ Routing undefined (could not recognize)\n\n%s" (map-elt message :object))
+       (acp--log-traffic client 'incoming 'unknown message)))))
 
 (cl-defun acp--parse-stderr-api-error (raw-output)
   "Parse RAW-OUTPUT, typically from stderr.
@@ -476,12 +482,12 @@ Returns non-nil if error was parseable."
               (error nil)))
         (error nil)))))
 
-(defun acp--log (label format-string &rest args)
-  "Log message using LABEL, FORMAT-STRING, and ARGS."
+(defun acp--log (client label format-string &rest args)
+  "Log CLIENT message using LABEL, FORMAT-STRING, and ARGS."
   (unless format-string
     (error ":format-string is required"))
   (when acp-logging-enabled
-    (let ((log-buffer (get-buffer-create "*acp log*")))
+    (let ((log-buffer (acp-logs-buffer :client client)))
       (with-current-buffer log-buffer
         (goto-char (point-max))
         (if label
@@ -497,11 +503,12 @@ Returns non-nil if error was parseable."
         (buffer-string))
     json))
 
-(defun acp--log-traffic (direction kind message)
-  "Log traffic MESSAGE to \"*acp traffic*\" buffer.
-KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
+(defun acp--log-traffic (client direction kind message)
+  "Log CLIENT traffic MESSAGE to \"*acp traffic*\" buffer.
+KIND may be `request', `response', or `notification'.
+DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
   (let ((inhibit-read-only t)
-        (traffic-buffer (get-buffer-create "*acp traffic*")))
+        (traffic-buffer (acp-traffic-buffer :client client)))
     (with-current-buffer traffic-buffer
       (goto-char (point-max))
       (let* ((object (map-elt message :object))
@@ -552,8 +559,8 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
       (delete-region (point-min) (point)))))
 
 (defun acp--show-json-object (object)
-  "Display the JSON OBJECT in a pretty-printed buffer."
-  (let ((json-buffer (get-buffer-create "*acp json object*")))
+  "Display OBJECT in a pretty-printed buffer."
+  (let ((json-buffer (get-buffer-create "*acp object*")))
     (with-current-buffer json-buffer
       (read-only-mode -1)
       (erase-buffer)
@@ -563,12 +570,30 @@ KIND is either `incoming' or `outgoing', OBJECT is the parsed object."
       (read-only-mode 1))
     (display-buffer json-buffer)))
 
-(defun acp-reset-logs ()
-  "Reset log buffers."
-  (with-current-buffer (get-buffer-create "*acp log*")
+(cl-defun acp-reset-logs (&key client)
+  "Reset CLIENT log buffers."
+  (with-current-buffer (acp-logs-buffer :client client)
     (erase-buffer))
-  (with-current-buffer (get-buffer-create "*acp traffic*")
+  (with-current-buffer (acp-traffic-buffer :client client)
     (erase-buffer)))
+
+(cl-defun acp-logs-buffer (&key client)
+  "Get CLIENT logs buffer."
+  (get-buffer-create (format "*acp-(%s)-%s log*"
+                             (map-elt client :command)
+                             (map-elt client :instance-count))))
+
+(cl-defun acp-traffic-buffer (&key client)
+  "Get CLIENT traffic buffer."
+  (get-buffer-create (format "*acp-(%s)-%s traffic*"
+                             (map-elt client :command)
+                             (map-elt client :instance-count))))
+
+(defun acp--increment-instance-count ()
+  "Increment variable `acp-instance-count'."
+  (if (= acp-instance-count most-positive-fixnum)
+      (setq acp-instance-count 0)
+    (setq acp-instance-count (1+ acp-instance-count))))
 
 (provide 'acp)
 
