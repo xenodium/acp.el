@@ -329,10 +329,10 @@ See response https://agentclientprotocol.com/protocol/schema#initializeresponse.
   `((:method . "initialize")
     (:params . ((protocolVersion . ,protocol-version)
                 (clientCapabilities . ((fs . ((readTextFile . ,(if read-text-file-capability
-                                                                   :true
+                                                                   t
                                                                  :false))
                                               (writeTextFile . ,(if write-text-file-capability
-                                                                    :true
+                                                                    t
                                                                   :false))))))))))
 
 (cl-defun acp-make-authenticate-request (&key method-id)
