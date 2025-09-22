@@ -62,7 +62,7 @@ RESPONSE-SENDER: Sends responses."
   (unless command
     (error ":command is required"))
   (unless (executable-find command)
-    (error "%s not found.  Please install" command))
+    (error "\"%s\" command line utility not found.  Please install it" command))
   (list (cons :instance-count (acp--increment-instance-count))
         (cons :process nil)
         (cons :command command)
@@ -110,7 +110,7 @@ https://www.anthropic.com/claude-code"
   (unless (map-elt client :command)
     (error ":command is required"))
   (unless (executable-find (map-elt client :command))
-    (error "%s not found.  Please install it" (map-elt client :command)))
+    (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
   (when (acp--client-started-p client)
     (error "Client already started"))
   (let* ((pending-input "")
