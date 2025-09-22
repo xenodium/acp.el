@@ -145,7 +145,7 @@ https://www.anthropic.com/claude-code"
                                 (acp--log client "INCOMING LINE" "%s" (match-string 1 pending-input))
                                 (when-let* ((json (match-string 1 pending-input))
                                             (object (condition-case nil
-                                                        (json-parse-string json :object-type 'alist)
+                                                        (json-parse-string json :object-type 'alist :null-object nil)
                                                       (error
                                                        (acp--log client "JSON PARSE ERROR" "Invalid JSON: %s" json)
                                                        nil))))
@@ -423,7 +423,10 @@ ON-REQUEST is of the form (lambda (request))."
   (let-alist (map-elt message :object)
     (or
      ;; Method request result (success)
-     (when-let ((incoming-response (and .result .id
+     (when-let ((incoming-response (and .id
+                                        ;; Must check against key and not value because
+                                        ;; nil result is valid also.
+                                        (map-contains-key (map-elt message :object) 'result)
                                         (funcall (map-elt client :request-resolver)
                                                  :client client :id .id))))
        (acp--log client nil "↳ Routing as response (result)")
@@ -481,10 +484,10 @@ Returns non-nil if error was parseable."
   (when (string-match "Attempt \\([0-9]+\\) failed with status \\([0-9]+\\)\\. Retrying.*ApiError: \\({.*}\\)" raw-output)
     (let ((error-json (match-string 3 raw-output)))
       (condition-case nil
-          (let-alist (json-parse-string error-json :object-type 'alist)
+          (let-alist (json-parse-string error-json :object-type 'alist :null-object nil)
             ;; Parse the inner JSON from the message field and return just the error part
             (condition-case nil
-                (map-elt (json-parse-string .error.message :object-type 'alist) 'error)
+                (map-elt (json-parse-string .error.message :object-type 'alist :null-object nil) 'error)
               (error nil)))
         (error nil)))))
 
