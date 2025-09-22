@@ -65,14 +65,18 @@
         (pp objects (current-buffer))))
     (message "Saved %s" destination)))
 
+(defun acp-traffic-read-file (traffic-file)
+  "Read TRAFFIC-FILE into message objects."
+  (with-temp-buffer
+    (insert-file-contents traffic-file)
+    (goto-char (point-min))
+    (read (current-buffer))))
+
 (defun acp-traffic-open-file ()
   "Select and open a traffic file."
   (interactive)
   (if-let* ((traffic-file (read-file-name "Open traffic file: " nil nil t))
-            (messages (with-temp-buffer
-                        (insert-file-contents traffic-file)
-                        (goto-char (point-min))
-                        (read (current-buffer))))
+            (messages (acp-traffic-read-file traffic-file))
             (buffer (get-buffer-create (format "*ACP traffic (%s)*" (file-name-nondirectory traffic-file)))))
       (progn
         (dolist (message messages)
