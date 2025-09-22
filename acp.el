@@ -386,6 +386,55 @@ https://agentclientprotocol.com/protocol/schema#requestpermissionresponse."
     (:result . ((outcome . ((outcome . "selected")
                             (optionId . ,option-id)))))))
 
+(cl-defun acp-make-fs-read-text-file-response (&key request-id content error)
+  "Instantiate a \"fs/read_text_file\" response.
+
+Either CONTENT or ERROR should be provided, not both.
+
+See https://agentclientprotocol.com/protocol/schema#readtextfileresponse for
+REQUEST-ID, CONTENT, and ERROR."
+  (unless request-id
+    (error ":request-id is required"))
+  (cond
+   ((and content error)
+    (error "Either :content or :error but not both"))
+   (error
+    `((:request-id . ,request-id)
+      (:error . ,error)))
+   (content
+    `((:request-id . ,request-id)
+      (:result . ((content . ,content)))))
+   (t
+    (error "Either :content or :error is required"))))
+
+(cl-defun acp-make-fs-write-text-file-response (&key request-id error)
+  "Instantiate a \"fs/write_text_file\" response.
+
+See https://agentclientprotocol.com/protocol/schema#writetextfileresponse for
+REQUEST-ID and ERROR."
+  (unless request-id
+    (error ":request-id is required"))
+  (if error
+      `((:request-id . ,request-id)
+        (:error . ,error))
+    `((:request-id . ,request-id)
+      (:result . nil))))
+
+(cl-defun acp-make-error (&key code message data)
+  "Create a JSON-RPC error object.
+
+See https://www.jsonrpc.org/specification#error_object for
+CODE, MESSAGE or DATA."
+  (unless code
+    (error ":code is required"))
+  (unless message
+    (error ":message is required"))
+  (let ((error `((code . ,code)
+                 (message . ,message))))
+    (when data
+      (nconc error `((data . ,data))))
+    error))
+
 (cl-defun acp-make-session-cancel-request (&key session-id reason)
   "Instantiate a \"session/cancel\" request.
 
