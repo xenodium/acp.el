@@ -116,11 +116,14 @@ https://www.anthropic.com/claude-code"
   (let* ((pending-input "")
          (process-environment (append (map-elt client :environment-variables)
                                       process-environment))
+         (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
+                                                   (map-elt client :command)
+                                                   (map-elt client :instance-count))))
          (stderr-proc (make-pipe-process
                        :name (format "acp-client-stderr(%s)-%s"
                                      (map-elt client :command)
                                      (map-elt client :instance-count))
-                       :buffer nil
+                       :buffer stderr-buffer
                        :filter (lambda (_process raw-output)
                                  (acp--log client "STDERR" "%s" (string-trim raw-output))
                                  (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
@@ -160,7 +163,9 @@ https://www.anthropic.com/claude-code"
                                        (funcall handler request)))))))
                     :sentinel (lambda (_process _event)
                                 (when (process-live-p stderr-proc)
-                                  (delete-process stderr-proc))))))
+                                  (delete-process stderr-proc))
+                                (when (buffer-live-p stderr-buffer)
+                                  (kill-buffer stderr-buffer))))))
       (map-put! client :process process))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification)
