@@ -141,26 +141,28 @@ https://www.anthropic.com/claude-code"
                     :filter (lambda (_proc input)
                               (acp--log client "INCOMING TEXT" "%s" input)
                               (setq pending-input (concat pending-input input))
-                              (while (string-match "\\(.*\\)\n" pending-input)
-                                (acp--log client "INCOMING LINE" "%s" (match-string 1 pending-input))
-                                (when-let* ((json (match-string 1 pending-input))
-                                            (object (condition-case nil
-                                                        (json-parse-string json :object-type 'alist :null-object nil)
-                                                      (error
-                                                       (acp--log client "JSON PARSE ERROR" "Invalid JSON: %s" json)
-                                                       nil))))
-                                  (setq pending-input (substring pending-input (match-end 0)))
-                                  (acp--route-incoming-message
-                                   :message (acp--make-message :json json :object object)
-                                   :client client
-                                   :on-notification
-                                   (lambda (notification)
-                                     (dolist (handler (map-elt client :notification-handlers))
-                                       (funcall handler notification)))
-                                   :on-request
-                                   (lambda (request)
-                                     (dolist (handler (map-elt client :request-handlers))
-                                       (funcall handler request)))))))
+                              (let ((start 0) pos)
+                                (while (setq pos (string-search "\n" pending-input start))
+                                  (let ((json (substring pending-input start pos)))
+                                    (acp--log client "INCOMING LINE" "%s" json)
+                                    (when-let* ((object (condition-case nil
+                                                            (json-parse-string json :object-type 'alist :null-object nil)
+                                                          (error
+                                                           (acp--log client "JSON PARSE ERROR" "Invalid JSON: %s" json)
+                                                           nil))))
+                                      (acp--route-incoming-message
+                                       :message (acp--make-message :json json :object object)
+                                       :client client
+                                       :on-notification
+                                       (lambda (notification)
+                                         (dolist (handler (map-elt client :notification-handlers))
+                                           (funcall handler notification)))
+                                       :on-request
+                                       (lambda (request)
+                                         (dolist (handler (map-elt client :request-handlers))
+                                           (funcall handler request))))))
+                                  (setq start (1+ pos)))
+                                (setq pending-input (substring pending-input start))))
                     :sentinel (lambda (_process _event)
                                 (when (process-live-p stderr-proc)
                                   (delete-process stderr-proc))
