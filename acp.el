@@ -146,7 +146,7 @@ https://www.anthropic.com/claude-code"
                                   (let ((json (substring pending-input start pos)))
                                     (acp--log client "INCOMING LINE" "%s" json)
                                     (when-let* ((object (condition-case nil
-                                                            (json-parse-string json :object-type 'alist :null-object nil)
+                                                            (acp--parse-json json)
                                                           (error
                                                            (acp--log client "JSON PARSE ERROR" "Invalid JSON: %s" json)
                                                            nil))))
@@ -277,7 +277,7 @@ When non-nil SYNC, send request synchronously."
                   (setq result data
                         done 'error))))
     (acp--log client "OUTGOING OBJECT" "%s" request)
-    (let ((json (concat (json-serialize request) "\n")))
+    (let ((json (acp--serialize-json request)))
       (acp--log-traffic client 'outgoing 'request (acp--make-message :object request :json json))
       (process-send-string proc json))
     (when sync
@@ -311,7 +311,7 @@ When non-nil SYNC, send request synchronously."
            (response `((jsonrpc . ,acp--jsonrpc-version)
                        (id . ,request-id)
                        (result . ,result-data))))
-      (let ((json (concat (json-serialize response) "\n")))
+      (let ((json (acp--serialize-json response)))
         (acp--log-traffic client 'outgoing 'response (acp--make-message :object response :json json))
         (process-send-string proc json)))))
 
@@ -535,10 +535,10 @@ Returns non-nil if error was parseable."
   (when (string-match "Attempt \\([0-9]+\\) failed with status \\([0-9]+\\)\\. Retrying.*ApiError: \\({.*}\\)" raw-output)
     (let ((error-json (match-string 3 raw-output)))
       (condition-case nil
-          (let-alist (json-parse-string error-json :object-type 'alist :null-object nil)
+          (let-alist (acp--parse-json error-json)
             ;; Parse the inner JSON from the message field and return just the error part
             (condition-case nil
-                (map-elt (json-parse-string .error.message :object-type 'alist :null-object nil) 'error)
+                (map-elt (acp--parse-json .error.message) 'error)
               (error nil)))
         (error nil)))))
 
@@ -607,6 +607,14 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
   (if (= acp-instance-count most-positive-fixnum)
       (setq acp-instance-count 0)
     (setq acp-instance-count (1+ acp-instance-count))))
+
+(defun acp--parse-json (json)
+  "Parse JSON using a consistent configuration."
+  (json-parse-string json :object-type 'alist :null-object nil))
+
+(defun acp--serialize-json (object)
+  "Serialize OBJECT to JSON using a consistent configuration."
+  (concat (json-serialize object) "\n"))
 
 (provide 'acp)
 
