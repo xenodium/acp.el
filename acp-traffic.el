@@ -35,6 +35,8 @@
 
 ;;; Code:
 
+(eval-when-compile
+  (require 'cl-lib))
 (require 'hl-line)
 (require 'map)
 

@@ -37,7 +37,8 @@
 
 (require 'map)
 (require 'json)
-(require 'cl-lib)
+(eval-when-compile
+  (require 'cl-lib))
 (require 'acp-traffic)
 
 (defconst acp--jsonrpc-version "2.0")

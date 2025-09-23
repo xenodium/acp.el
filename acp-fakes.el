@@ -7,6 +7,8 @@
 ;;; Code:
 
 (require 'acp)
+(eval-when-compile
+  (require 'cl-lib))
 (require 'map)
 
 (eval-when-compile (require 'cl))
