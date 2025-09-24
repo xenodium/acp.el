@@ -514,8 +514,7 @@ ON-REQUEST is of the form (lambda (request))."
        (if (map-elt incoming-response :on-success)
            (funcall (map-elt incoming-response :on-success) .result)
          ;; TODO: Consolidate serialization.
-         (acp--log client nil "Unhandled result:\n\n%s" (or (map-elt message :object)
-                                                            (map-elt message :json))))
+         (acp--log client nil "Unhandled result:\n\n%s" message))
        t)
 
      ;; Method request result (failure)
@@ -527,12 +526,9 @@ ON-REQUEST is of the form (lambda (request))."
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt incoming-response :on-failure)
            (if (>= (cdr (func-arity (map-elt incoming-response :on-failure))) 2)
-               (funcall (map-elt incoming-response :on-failure)
-                        .error (or (map-elt message :object)
-                                   (map-elt message :json)))
+               (funcall (map-elt incoming-response :on-failure) .error message)
              (funcall (map-elt incoming-response :on-failure) .error))
-         (acp--log client nil "Unhandled error:\n\n%s" (or (map-elt message :object)
-                                                           (map-elt message :json))))
+         (acp--log client nil "Unhandled error:\n\n%s" message))
        t)
 
      ;; Incoming method request
