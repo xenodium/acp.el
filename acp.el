@@ -51,15 +51,14 @@
                                 request-sender request-resolver response-sender)
   "Create an ACP client.
 
-COMMAND: Binary or command line utility to invoke.
-COMMAND-PARAMS: Command params.
-ENVIRONMENT-VARIABLES: In the form `(\"VAR=foo\").
+This returns a alist representing the client.
 
-The following are only neede if you'd like to mock clients.
+COMMAND is the binary or command-line utility to invoke.
+COMMAND-PARAMS is a list of strings for command arguments.
+ENVIRONMENT-VARIABLES is a list of strings in the form \"VAR=foo\".
 
-REQUEST-SENDER: Sends requests.
-REQUEST-RESOLVER: Resolves incoming requests to handler.
-RESPONSE-SENDER: Sends responses."
+REQUEST-SENDER, REQUEST-RESOLVER, and RESPONSE-SENDER are
+functions for advanced customization or testing."
   (unless command
     (error ":command is required"))
   (unless (executable-find command)
@@ -79,9 +78,12 @@ RESPONSE-SENDER: Sends responses."
         (cons :response-sender (or response-sender #'acp--response-sender))))
 
 (cl-defun acp-make-gemini-client (&key api-key)
-  "Create a Gemini ACP client with API-KEY.
+  "Create a Gemini ACP client.
 
-https://github.com/google-gemini/gemini-cli"
+This is a convenience wrapper around `acp-make-client` for the
+Gemini CLI tool.  API-KEY is the Gemini API key.
+
+See https://github.com/google-gemini/gemini-cli"
   (unless api-key
     (error ":api-key is required"))
   (acp-make-client :command "gemini"
@@ -90,9 +92,12 @@ https://github.com/google-gemini/gemini-cli"
                                             (list (format "GEMINI_API_KEY=%s" api-key)))))
 
 (cl-defun acp-make-claude-client (&key api-key)
-  "Create Claude Code ACP client with API-KEY.
+  "Create a Claude Code ACP client.
 
-https://www.anthropic.com/claude-code"
+This is a convenience wrapper around `acp-make-client` for the
+Claude Code CLI tool.  API-KEY is the Anthropic API key.
+
+See https://www.anthropic.com/claude-code"
   (unless api-key
     (error ":api-key is required"))
   (acp-make-client :command "claude-code-acp"
@@ -348,12 +353,14 @@ When non-nil SYNC, send request synchronously."
                                             write-text-file-capability)
   "Instantiate an \"initialize\" request.
 
-See request's PROTOCOL-VERSION, READ-TEXT-FILE-CAPABILITY, and
-WRITE-TEXT-FILE-CAPABILITY usage at:
-https://agentclientprotocol.com/protocol/schema#initializerequest for
+PROTOCOL-VERSION is the version of the ACP protocol to use.
+READ-TEXT-FILE-CAPABILITY is a boolean indicating if the client
+can read text files.
+WRITE-TEXT-FILE-CAPABILITY is a boolean indicating if the client
+can write text files.
 
-
-See response https://agentclientprotocol.com/protocol/schema#initializeresponse."
+See https://agentclientprotocol.com/protocol/schema#initializerequest
+and https://agentclientprotocol.com/protocol/schema#initializeresponse."
   (unless protocol-version
     (error ":protocol-version is required"))
   `((:method . "initialize")
@@ -368,8 +375,9 @@ See response https://agentclientprotocol.com/protocol/schema#initializeresponse.
 (cl-defun acp-make-authenticate-request (&key method-id)
   "Instantiate an \"authenticate\" request.
 
-See request's METHOD-ID usage at:
-https://agentclientprotocol.com/protocol/schema#authenticaterequest."
+METHOD-ID is the authentication method to use.
+
+See https://agentclientprotocol.com/protocol/schema#authenticaterequest."
   (unless method-id
     (error ":method-id is required"))
   `((:method . "authenticate")
@@ -378,10 +386,11 @@ https://agentclientprotocol.com/protocol/schema#authenticaterequest."
 (cl-defun acp-make-session-new-request (&key cwd mcp-servers)
   "Instantiate a \"session/new\" request.
 
-See request's CWD and MCP-SERVERS usage at
-https://agentclientprotocol.com/protocol/schema#newsessionrequest
+CWD is the current working directory for the session.
+MCP-SERVERS is a list of MCP servers to use.
 
-See response https://agentclientprotocol.com/protocol/schema#newsessionresponse."
+See https://agentclientprotocol.com/protocol/schema#newsessionrequest
+and https://agentclientprotocol.com/protocol/schema#newsessionresponse."
   (unless cwd
     (error ":cwd is required"))
   `((:method . "session/new")
@@ -389,12 +398,13 @@ See response https://agentclientprotocol.com/protocol/schema#newsessionresponse.
                 (mcpServers . ,(or mcp-servers []))))))
 
 (cl-defun acp-make-session-prompt-request (&key session-id prompt)
-  "Instantiate an \"session/prompt\" request.
+  "Instantiate a \"session/prompt\" request.
 
-See request https://agentclientprotocol.com/protocol/schema#promptrequest for
-SESSION-ID and PROMPT usage.
+SESSION-ID is the ID of the session to send the prompt to.
+PROMPT is the prompt string.
 
-See response https://agentclientprotocol.com/protocol/schema#promptresponse."
+See https://agentclientprotocol.com/protocol/schema#promptrequest
+and https://agentclientprotocol.com/protocol/schema#promptresponse."
   (unless session-id
     (error ":session-id is required"))
   (unless prompt
@@ -406,8 +416,10 @@ See response https://agentclientprotocol.com/protocol/schema#promptresponse."
 (cl-defun acp-make-session-request-permission-response (&key request-id option-id)
   "Instantiate a \"session/request_permission\" response.
 
-See response's REQUEST-ID and OPTION-ID usage at
-https://agentclientprotocol.com/protocol/schema#requestpermissionresponse."
+REQUEST-ID is the ID of the request this is a response to.
+OPTION-ID is the ID of the option selected by the user.
+
+See https://agentclientprotocol.com/protocol/schema#requestpermissionresponse."
   (unless request-id
     (error ":request-id is required"))
   (unless option-id
@@ -419,10 +431,11 @@ https://agentclientprotocol.com/protocol/schema#requestpermissionresponse."
 (cl-defun acp-make-fs-read-text-file-response (&key request-id content error)
   "Instantiate a \"fs/read_text_file\" response.
 
-Either CONTENT or ERROR should be provided, not both.
+REQUEST-ID is the ID of the request this is a response to.
+Provide either CONTENT (the file content as a string) or ERROR,
+but not both.
 
-See https://agentclientprotocol.com/protocol/schema#readtextfileresponse for
-REQUEST-ID, CONTENT, and ERROR."
+See https://agentclientprotocol.com/protocol/schema#readtextfileresponse."
   (unless request-id
     (error ":request-id is required"))
   (cond
@@ -440,8 +453,10 @@ REQUEST-ID, CONTENT, and ERROR."
 (cl-defun acp-make-fs-write-text-file-response (&key request-id error)
   "Instantiate a \"fs/write_text_file\" response.
 
-See https://agentclientprotocol.com/protocol/schema#writetextfileresponse for
-REQUEST-ID and ERROR."
+REQUEST-ID is the ID of the request this is a response to.
+ERROR is an optional error object if the write operation failed.
+
+See https://agentclientprotocol.com/protocol/schema#writetextfileresponse."
   (unless request-id
     (error ":request-id is required"))
   (if error
@@ -453,8 +468,11 @@ REQUEST-ID and ERROR."
 (cl-defun acp-make-error (&key code message data)
   "Create a JSON-RPC error object.
 
-See https://www.jsonrpc.org/specification#error_object for
-CODE, MESSAGE or DATA."
+CODE is the error code.
+MESSAGE is a string providing a short description of the error.
+DATA is an optional value that contains additional information.
+
+See https://www.jsonrpc.org/specification#error_object."
   (unless code
     (error ":code is required"))
   (unless message
@@ -468,11 +486,10 @@ CODE, MESSAGE or DATA."
 (cl-defun acp-make-session-cancel-request (&key session-id reason)
   "Instantiate a \"session/cancel\" request.
 
-SESSION-ID is required and should be the ID of the session to cancel.
+SESSION-ID is the ID of the session to cancel.
+REASON is an optional string explaining the reason for cancellation.
 
-REASON is an optional string explaining the cancellation reason.
-
-See https://agentclientprotocol.com/protocol/schema#sessioncancelrequest for details."
+See https://agentclientprotocol.com/protocol/schema#sessioncancelrequest."
   (unless session-id
     (error ":session-id is required"))
   `((:method . "session/cancel")
