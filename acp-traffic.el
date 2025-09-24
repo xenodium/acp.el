@@ -175,12 +175,12 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
         (add-text-properties 0 (length line-text)
                              `(acp-traffic-object ,traffic-entry)
                              line-text)
-        (insert line-text)))
-    ;; Keep buffer size manageable (last 1000 lines)
-    (when (> (count-lines (point-min) (point-max)) 1000)
-      (goto-char (point-min))
-      (forward-line 100)
-      (delete-region (point-min) (point)))))
+        (insert line-text))
+      ;; Keep buffer size manageable (last 1000 lines)
+      (when (> (count-lines (point-min) (point-max)) 1000)
+        (goto-char (point-min))
+        (forward-line 100)
+        (delete-region (point-min) (point))))))
 
 (defun acp-traffic--objects ()
   "Extract all the traffic objects from current traffic buffer."
