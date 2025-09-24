@@ -485,8 +485,8 @@ See https://agentclientprotocol.com/protocol/schema#sessioncancelrequest for det
 
 (cl-defun acp--make-message (&key json object)
   "Create message with JSON and OBJECT."
-  (list (cons :json json)
-        (cons :object object)))
+  (list (cons :object object)
+        (cons :json json)))
 
 (cl-defun acp--route-incoming-message (&key client message on-notification on-request)
   "Parse CLIENT's incoming MESSAGE with json/object and route accordingly.
