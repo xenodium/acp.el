@@ -171,34 +171,54 @@ https://www.anthropic.com/claude-code"
                                   (kill-buffer stderr-buffer))))))
       (map-put! client :process process))))
 
-(cl-defun acp-subscribe-to-notifications (&key client on-notification)
+(cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.
 
-ON-NOTIFICATION is of the form: (lambda (notification))"
+ON-NOTIFICATION is of the form: (lambda (notification))
+
+and invoked with BUFFER as current."
   (unless client
     (error ":client is required"))
   (unless on-notification
     (error ":on-notification is required"))
   (let ((handlers (map-elt client :notification-handlers)))
-    (push on-notification handlers)
+    (push (if buffer
+              (lambda (notification)
+                (unless (buffer-live-p buffer)
+                  (error "Accessing dead buffer from ACP notification"))
+                (with-current-buffer buffer
+                  (funcall on-notification notification)))
+            on-notification)
+          handlers)
     (map-put! client :notification-handlers handlers)))
 
-(cl-defun acp-subscribe-to-requests (&key client on-request)
+(cl-defun acp-subscribe-to-requests (&key client on-request buffer)
   "Subscribe to incoming CLIENT requests.
 
-ON-REQUEST is of the form: (lambda (request))"
+ON-REQUEST is of the form: (lambda (request))
+
+and invoked with BUFFER as current."
   (unless client
     (error ":client is required"))
   (unless on-request
     (error ":on-request is required"))
   (let ((handlers (map-elt client :request-handlers)))
-    (push on-request handlers)
+    (push (if buffer
+              (lambda (request)
+                (unless (buffer-live-p buffer)
+                  (error "Accessing dead buffer from ACP request"))
+                (with-current-buffer buffer
+                  (funcall on-request request)))
+            on-request)
+          handlers)
     (map-put! client :request-handlers handlers)))
 
-(cl-defun acp-subscribe-to-errors (&key client on-error)
+(cl-defun acp-subscribe-to-errors (&key client on-error buffer)
   "Subscribe to agent errors using CLIENT.
 
 ON-ERROR is of the form: (lambda (error))
+
+and invoked with BUFFER as current.
 
 Note: These are agent process errors.
       For request errors refer to corresponding API's on-error."
@@ -207,7 +227,14 @@ Note: These are agent process errors.
   (unless on-error
     (error ":on-error is required"))
   (let ((handlers (map-elt client :error-handlers)))
-    (push on-error handlers)
+    (push (if buffer
+              (lambda (error)
+                (unless (buffer-live-p buffer)
+                  (error "Accessing dead buffer from ACP error"))
+                (with-current-buffer buffer
+                  (funcall on-error error)))
+            on-error)
+          handlers)
     (map-put! client :error-handlers handlers)))
 
 (cl-defun acp-shutdown (&key client)
