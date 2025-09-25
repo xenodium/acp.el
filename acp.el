@@ -91,6 +91,22 @@ See https://github.com/google-gemini/gemini-cli"
                    :environment-variables (when api-key
                                             (list (format "GEMINI_API_KEY=%s" api-key)))))
 
+(cl-defun acp-make-codex-client (&key api-key)
+  "Create a Codex ACP client.
+
+This is a convenience wrapper around `acp-make-client` for the
+codex-acp tool.  API-KEY is the OpenAI API key.
+
+See https://github.com/cola-io/codex-acp"
+  (unless api-key
+    (error ":api-key is required"))
+  (unless (executable-find "codex-acp")
+    (user-error "codex-acp not found.  See https://github.com/cola-io/codex-acp"))
+  (acp-make-client :command "codex-acp"
+                   :environment-variables (when api-key
+                                            (list (format "OPENAI_API_KEY=%s" api-key)))))
+
+
 (cl-defun acp-make-claude-client (&key api-key)
   "Create a Claude Code ACP client.
 
