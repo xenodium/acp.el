@@ -79,49 +79,6 @@ functions for advanced customization or testing."
         (cons :request-resolver (or request-resolver #'acp--request-resolver))
         (cons :response-sender (or response-sender #'acp--response-sender))))
 
-(cl-defun acp-make-gemini-client (&key api-key)
-  "Create a Gemini ACP client.
-
-This is a convenience wrapper around `acp-make-client` for the
-Gemini CLI tool.  API-KEY is the Gemini API key.
-
-See https://github.com/google-gemini/gemini-cli"
-  (unless api-key
-    (error ":api-key is required"))
-  (acp-make-client :command "gemini"
-                   :command-params '("--experimental-acp")
-                   :environment-variables (when api-key
-                                            (list (format "GEMINI_API_KEY=%s" api-key)))))
-
-(cl-defun acp-make-codex-client (&key api-key)
-  "Create a Codex ACP client.
-
-This is a convenience wrapper around `acp-make-client` for the
-codex-acp tool.  API-KEY is the OpenAI API key.
-
-See https://github.com/cola-io/codex-acp"
-  (unless api-key
-    (error ":api-key is required"))
-  (unless (executable-find "codex-acp")
-    (user-error "Executable codex-acp not found.  See https://github.com/cola-io/codex-acp"))
-  (acp-make-client :command "codex-acp"
-                   :environment-variables (when api-key
-                                            (list (format "OPENAI_API_KEY=%s" api-key)))))
-
-
-(cl-defun acp-make-claude-client (&key api-key)
-  "Create a Claude Code ACP client.
-
-This is a convenience wrapper around `acp-make-client` for the
-Claude Code CLI tool.  API-KEY is the Anthropic API key.
-
-See https://www.anthropic.com/claude-code"
-  (unless api-key
-    (error ":api-key is required"))
-  (acp-make-client :command "claude-code-acp"
-                   :environment-variables (when api-key
-                                            (list (format "ANTHROPIC_API_KEY=%s" api-key)))))
-
 (defun acp--client-started-p (client)
   "Return non-nil if CLIENT process has been started."
   (and (map-elt client :process)
