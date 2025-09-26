@@ -48,7 +48,8 @@
 (defvar acp-instance-count 0)
 
 (cl-defun acp-make-client (&key command command-params environment-variables
-                                request-sender request-resolver response-sender)
+                                request-sender notification-sender request-resolver
+                                response-sender)
   "Create an ACP client.
 
 This returns a alist representing the client.
@@ -57,7 +58,7 @@ COMMAND is the binary or command-line utility to invoke.
 COMMAND-PARAMS is a list of strings for command arguments.
 ENVIRONMENT-VARIABLES is a list of strings in the form \"VAR=foo\".
 
-REQUEST-SENDER, REQUEST-RESOLVER, and RESPONSE-SENDER are
+REQUEST-SENDER, NOTIFICATION-SENDER, REQUEST-RESOLVER, and RESPONSE-SENDER are
 functions for advanced customization or testing."
   (unless command
     (error ":command is required"))
@@ -74,6 +75,7 @@ functions for advanced customization or testing."
         (cons :request-handlers ())
         (cons :error-handlers ())
         (cons :request-sender (or request-sender #'acp--request-sender))
+        (cons :notification-sender (or notification-sender #'acp--notification-sender))
         (cons :request-resolver (or request-resolver #'acp--request-resolver))
         (cons :response-sender (or response-sender #'acp--response-sender))))
 
@@ -287,6 +289,21 @@ When non-nil SYNC, send request synchronously."
            :on-failure on-failure
            :sync sync))
 
+(cl-defun acp-send-notification (&key client notification sync)
+  "Send NOTIFICATION from CLIENT.
+
+When non-nil SYNC, send notification synchronously."
+  (unless client
+    (error ":client is required"))
+  (unless notification
+    (error ":notification is required"))
+  (unless (acp--client-started-p client)
+    (acp--start-client :client client))
+  (funcall (map-elt client :notification-sender)
+           :client client
+           :notification notification
+           :sync sync))
+
 (cl-defun acp--request-sender (&key client request on-success on-failure sync)
   "Send REQUEST from CLIENT.
 
@@ -363,6 +380,38 @@ When non-nil SYNC, send request synchronously."
       (let ((json (acp--serialize-json response)))
         (acp--log-traffic client 'outgoing 'response (acp--make-message :object response :json json))
         (process-send-string proc json)))))
+
+(cl-defun acp--notification-sender (&key client notification sync)
+  "Send NOTIFICATION from CLIENT.
+
+ON-SUCCESS is of the form (lambda (response)).
+ON-FAILURE is of the form (lambda (error)).
+
+When non-nil SYNC, send notification synchronously."
+  (unless client
+    (error ":client is required"))
+  (unless notification
+    (error ":notification is required"))
+  (unless (acp--client-started-p client)
+    (acp--start-client :client client))
+  (let* ((method (map-elt notification :method))
+         (params (map-elt notification :params))
+         (proc (map-elt client :process))
+         (notification `((jsonrpc . ,acp--jsonrpc-version)
+                    (method . ,method)
+                    ,@(when params `((params . ,params)))))
+         (result nil)
+         (done nil))
+    (acp--log client "OUTGOING OBJECT" "%s" notification)
+    (let ((json (acp--serialize-json notification)))
+      (acp--log-traffic client 'outgoing 'notification (acp--make-message :object notification :json json))
+      (process-send-string proc json))
+    (when sync
+      (while (not done)
+        (accept-process-output proc 0.01))
+      (if (eq done 'error)
+          (error "ACP notification failed: %s" result)
+        result))))
 
 (cl-defun acp-make-initialize-request (&key protocol-version
                                             read-text-file-capability
@@ -499,13 +548,13 @@ See https://www.jsonrpc.org/specification#error_object."
       (nconc error `((data . ,data))))
     error))
 
-(cl-defun acp-make-session-cancel-request (&key session-id reason)
+(cl-defun acp-make-session-cancel-notification (&key session-id reason)
   "Instantiate a \"session/cancel\" request.
 
 SESSION-ID is the ID of the session to cancel.
 REASON is an optional string explaining the reason for cancellation.
 
-See https://agentclientprotocol.com/protocol/schema#sessioncancelrequest."
+See https://agentclientprotocol.com/protocol/schema#cancelnotification."
   (unless session-id
     (error ":session-id is required"))
   `((:method . "session/cancel")
