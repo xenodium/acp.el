@@ -459,7 +459,7 @@ and https://agentclientprotocol.com/protocol/schema#newsessionresponse."
   (unless cwd
     (error ":cwd is required"))
   `((:method . "session/new")
-    (:params . ((cwd . ,cwd)
+    (:params . ((cwd . ,(expand-file-name cwd))
                 (mcpServers . ,(or mcp-servers []))))))
 
 (cl-defun acp-make-session-prompt-request (&key session-id prompt)
