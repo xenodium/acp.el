@@ -103,7 +103,7 @@ See https://github.com/cola-io/codex-acp"
   (unless api-key
     (error ":api-key is required"))
   (unless (executable-find "codex-acp")
-    (user-error "codex-acp not found.  See https://github.com/cola-io/codex-acp"))
+    (user-error "Executable codex-acp not found.  See https://github.com/cola-io/codex-acp"))
   (acp-make-client :command "codex-acp"
                    :environment-variables (when api-key
                                             (list (format "OPENAI_API_KEY=%s" api-key)))))
