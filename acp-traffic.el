@@ -145,42 +145,43 @@ NAMED is required name to create buffer if needed."
   "Log MESSAGE to BUFFER.
 KIND may be `request', `response', or `notification'.
 DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
-  (let ((inhibit-read-only t))
-    (with-current-buffer buffer
-      (goto-char (point-max))
-      (let* ((object (map-elt message :object))
-             (timestamp (format-time-string "%H:%M:%S.%3N"))
-             (method (map-elt object 'method))
-             (has-result (map-elt object 'result))
-             (has-error (map-elt object 'error))
-             (method-info (or method
-                              (when has-result
-                                "result")
-                              (when has-error
-                                "error")
-                              "unknown"))
-             (line-text (format "%s %s %-12s %s\n"
-                                timestamp
-                                (propertize (if (eq direction 'incoming)
-                                                "←"
-                                              "→")
-                                            'face (if (eq direction 'incoming)
-                                                      'success
-                                                    'error))
-                                kind
-                                (propertize method-info 'face font-lock-function-name-face)))
-             (traffic-entry `((:direction . ,direction)
-                              (:kind . ,kind)
-                              (:object . ,object))))
-        (add-text-properties 0 (length line-text)
-                             `(acp-traffic-object ,traffic-entry)
-                             line-text)
-        (insert line-text))
-      ;; Keep buffer size manageable (last 1000 lines)
-      (when (> (count-lines (point-min) (point-max)) 1000)
-        (goto-char (point-min))
-        (forward-line 100)
-        (delete-region (point-min) (point))))))
+  (save-excursion
+    (let ((inhibit-read-only t))
+      (with-current-buffer buffer
+        (goto-char (point-max))
+        (let* ((object (map-elt message :object))
+               (timestamp (format-time-string "%H:%M:%S.%3N"))
+               (method (map-elt object 'method))
+               (has-result (map-elt object 'result))
+               (has-error (map-elt object 'error))
+               (method-info (or method
+                                (when has-result
+                                  "result")
+                                (when has-error
+                                  "error")
+                                "unknown"))
+               (line-text (format "%s %s %-12s %s\n"
+                                  timestamp
+                                  (propertize (if (eq direction 'incoming)
+                                                  "←"
+                                                "→")
+                                              'face (if (eq direction 'incoming)
+                                                        'success
+                                                      'error))
+                                  kind
+                                  (propertize method-info 'face font-lock-function-name-face)))
+               (traffic-entry `((:direction . ,direction)
+                                (:kind . ,kind)
+                                (:object . ,object))))
+          (add-text-properties 0 (length line-text)
+                               `(acp-traffic-object ,traffic-entry)
+                               line-text)
+          (insert line-text))
+        ;; Keep buffer size manageable (last 1000 lines)
+        (when (> (count-lines (point-min) (point-max)) 1000)
+          (goto-char (point-min))
+          (forward-line 100)
+          (delete-region (point-min) (point)))))))
 
 (defun acp-traffic--objects ()
   "Extract all the traffic objects from current traffic buffer."
