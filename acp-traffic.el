@@ -46,6 +46,8 @@
     (define-key map (kbd "C-x C-s") #'acp-traffic-save-to)
     (define-key map "n" #'acp-traffic-next-entry)
     (define-key map "p" #'acp-traffic-previous-entry)
+    (define-key map [down] #'acp-traffic-next-entry)
+    (define-key map [up] #'acp-traffic-previous-entry)
     (define-key map (kbd "RET") #'acp-traffic-display-entry)
     (define-key map [mouse-1] #'acp-traffic-display-entry)
     map)
@@ -94,12 +96,14 @@
   "Move to next traffic entry."
   (interactive)
   (forward-line)
+  (acp-traffic--update-line-highlight)
   (acp-traffic-display-entry))
 
 (defun acp-traffic-previous-entry ()
   "Move to previous traffic entry."
   (interactive)
   (forward-line -1)
+  (acp-traffic--update-line-highlight)
   (acp-traffic-display-entry))
 
 (defun acp-traffic-display-entry ()
@@ -135,11 +139,20 @@ NAMED is required name to create buffer if needed."
       (acp-traffic-mode)
       (current-buffer))))
 
+(defun acp-traffic--update-line-highlight ()
+  "Update the line highlight overlay to current line."
+  (dolist (overlay (overlays-in (point-min) (point-max)))
+    (when (overlay-get overlay 'acp-traffic)
+      (delete-overlay overlay)))
+  (let ((overlay (make-overlay (line-beginning-position) (1+ (line-end-position)))))
+    (overlay-put overlay 'face 'highlight)
+    (overlay-put overlay 'acp-traffic t)))
+
 (define-derived-mode acp-traffic-mode special-mode "ACP-traffic"
   "Major mode for ACP traffic monitoring."
   (setq buffer-read-only t)
   (use-local-map acp-traffic-mode-map)
-  (hl-line-mode +1))
+  (acp-traffic--update-line-highlight))
 
 (cl-defun acp-traffic-log-traffic (&key buffer direction kind message)
   "Log MESSAGE to BUFFER.
@@ -199,15 +212,59 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
 
 ;;;; Full traffic entry display
 
+(defvar acp-traffic-entry-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    (define-key map "n" #'acp-traffic-entry-next)
+    (define-key map "p" #'acp-traffic-entry-previous)
+    (define-key map [down] #'acp-traffic-entry-next)
+    (define-key map [up] #'acp-traffic-entry-previous)
+    map)
+  "Keymap for ACP-Traffic entry mode.")
+
+(define-derived-mode acp-traffic-entry-mode special-mode "ACP-traffic-entry"
+  "Major mode for ACP traffic entry display."
+  (setq buffer-read-only t)
+  (use-local-map acp-traffic-entry-mode-map))
+
+(defvar-local acp-traffic-entry--traffic-buffer nil
+  "Buffer-local variable pointing to the associated traffic buffer.")
+
+(defun acp-traffic-entry-next ()
+  "Move to next traffic entry in the traffic buffer."
+  (interactive)
+  (when acp-traffic-entry--traffic-buffer
+    (if-let ((window (get-buffer-window acp-traffic-entry--traffic-buffer)))
+        (with-selected-window window
+          (acp-traffic-next-entry)
+          (acp-traffic--update-line-highlight))
+      (acp-traffic-next-entry)
+      (acp-traffic--update-line-highlight))))
+
+(defun acp-traffic-entry-previous ()
+  "Move to previous traffic entry in the traffic buffer."
+  (interactive)
+  (when acp-traffic-entry--traffic-buffer
+    (if-let ((window (get-buffer-window acp-traffic-entry--traffic-buffer)))
+        (with-selected-window window
+          (acp-traffic-previous-entry)
+          (acp-traffic--update-line-highlight))
+      (acp-traffic-previous-entry)
+      (acp-traffic--update-line-highlight))))
+
 (defun acp-traffic-display-objects (objects)
   "Display OBJECTS."
-  (with-current-buffer (get-buffer-create "*ACP traffic entry*")
-    (erase-buffer)
-    (dolist (object objects)
-      (acp-traffic-display-objects-helper object 0)
-      (insert "\n"))
-    (goto-char (point-min))
-    (display-buffer (current-buffer))))
+  (let ((traffic-buffer (current-buffer))
+        (inhibit-read-only t))
+    (with-current-buffer (get-buffer-create "*ACP traffic entry*")
+      (erase-buffer)
+      (dolist (object objects)
+        (acp-traffic-display-objects-helper object 0)
+        (insert "\n"))
+      (acp-traffic-entry-mode)
+      (setq acp-traffic-entry--traffic-buffer traffic-buffer)
+      (goto-char (point-min))
+      (display-buffer (current-buffer)))))
 
 (defun acp-traffic-display-objects-helper (object indent)
   "Display OBJECT with INDENT."
