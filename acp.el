@@ -62,8 +62,6 @@ REQUEST-SENDER, NOTIFICATION-SENDER, REQUEST-RESOLVER, and RESPONSE-SENDER are
 functions for advanced customization or testing."
   (unless command
     (error ":command is required"))
-  (unless (executable-find command)
-    (error "\"%s\" command line utility not found.  Please install it" command))
   (list (cons :instance-count (acp--increment-instance-count))
         (cons :process nil)
         (cons :command command)
