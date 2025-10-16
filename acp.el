@@ -4,9 +4,9 @@
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/acp.el
-;; Version: 0.2.1
+;; Version: 0.3.1
 
-(defconst acp-package-version "0.2.1")
+(defconst acp-package-version "0.3.1")
 
 ;; This package is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -47,12 +47,20 @@
 
 (defvar acp-instance-count 0)
 
-(cl-defun acp-make-client (&key command command-params environment-variables
+(cl-defun acp-make-client (&key context-buffer command command-params environment-variables
                                 request-sender notification-sender request-resolver
                                 response-sender)
   "Create an ACP client.
 
 This returns a alist representing the client.
+
+CONTEXT-BUFFER becomes `current-buffer' for all APIs invoking callbacks
+unless overridden by them.  For example:
+
+  - `acp-send-request'
+  - `acp-subscribe-to-notifications'
+  - `acp-subscribe-to-requests'
+  - `acp-subscribe-to-errors'
 
 COMMAND is the binary or command-line utility to invoke.
 COMMAND-PARAMS is a list of strings for command arguments.
@@ -62,7 +70,8 @@ REQUEST-SENDER, NOTIFICATION-SENDER, REQUEST-RESOLVER, and RESPONSE-SENDER are
 functions for advanced customization or testing."
   (unless command
     (error ":command is required"))
-  (list (cons :instance-count (acp--increment-instance-count))
+  (list (cons :context-buffer context-buffer)
+        (cons :instance-count (acp--increment-instance-count))
         (cons :process nil)
         (cons :command command)
         (cons :command-params command-params)
@@ -160,13 +169,14 @@ and invoked with BUFFER as current."
   (unless on-notification
     (error ":on-notification is required"))
   (let ((handlers (map-elt client :notification-handlers)))
-    (push (if buffer
-              (lambda (notification)
-                (unless (buffer-live-p buffer)
-                  (error "Accessing dead buffer from ACP notification"))
-                (with-current-buffer buffer
-                  (funcall on-notification notification)))
-            on-notification)
+    (push (lambda (notification)
+            (with-temp-buffer ;; Fallback to a temp buffer
+              (with-current-buffer (or (when (buffer-live-p buffer)
+                                         buffer)
+                                       (when (buffer-live-p (map-elt client :context-buffer))
+                                         (map-elt client :context-buffer))
+                                       (current-buffer))
+                (funcall on-notification notification))))
           handlers)
     (map-put! client :notification-handlers handlers)))
 
@@ -181,13 +191,14 @@ and invoked with BUFFER as current."
   (unless on-request
     (error ":on-request is required"))
   (let ((handlers (map-elt client :request-handlers)))
-    (push (if buffer
-              (lambda (request)
-                (unless (buffer-live-p buffer)
-                  (error "Accessing dead buffer from ACP request"))
-                (with-current-buffer buffer
-                  (funcall on-request request)))
-            on-request)
+    (push (lambda (request)
+            (with-temp-buffer ;; Fallback to a temp buffer
+              (with-current-buffer (or (when (buffer-live-p buffer)
+                                         buffer)
+                                       (when (buffer-live-p (map-elt client :context-buffer))
+                                         (map-elt client :context-buffer))
+                                       (current-buffer))
+                (funcall on-request request))))
           handlers)
     (map-put! client :request-handlers handlers)))
 
@@ -205,13 +216,14 @@ Note: These are agent process errors.
   (unless on-error
     (error ":on-error is required"))
   (let ((handlers (map-elt client :error-handlers)))
-    (push (if buffer
-              (lambda (error)
-                (unless (buffer-live-p buffer)
-                  (error "Accessing dead buffer from ACP error"))
-                (with-current-buffer buffer
-                  (funcall on-error error)))
-            on-error)
+    (push (lambda (error)
+            (with-temp-buffer ;; Fallback to a temp buffer
+              (with-current-buffer (or (when (buffer-live-p buffer)
+                                         buffer)
+                                       (when (buffer-live-p (map-elt client :context-buffer))
+                                         (map-elt client :context-buffer))
+                                       (current-buffer))
+                (funcall on-error error))))
           handlers)
     (map-put! client :error-handlers handlers)))
 
@@ -224,13 +236,14 @@ Note: These are agent process errors.
   (kill-buffer (acp-logs-buffer :client client))
   (kill-buffer (acp-traffic-buffer :client client)))
 
-(cl-defun acp-send-request (&key client request on-success on-failure sync)
+(cl-defun acp-send-request (&key client request buffer on-success on-failure sync)
   "Send REQUEST from CLIENT.
 
 ON-SUCCESS is of the form (lambda (response)).
 ON-FAILURE is of the form (lambda (error)).
 
-When non-nil SYNC, send request synchronously."
+When non-nil SYNC, send request synchronously.
+When BUFFER is provided, callbacks executed within buffer context."
   (unless client
     (error ":client is required"))
   (unless request
@@ -240,6 +253,7 @@ When non-nil SYNC, send request synchronously."
   (funcall (map-elt client :request-sender)
            :client client
            :request request
+           :buffer buffer
            :on-success on-success
            :on-failure on-failure
            :sync sync))
@@ -259,13 +273,13 @@ When non-nil SYNC, send notification synchronously."
            :notification notification
            :sync sync))
 
-(cl-defun acp--request-sender (&key client request on-success on-failure sync)
+(cl-defun acp--request-sender (&key client request buffer on-success on-failure sync)
   "Send REQUEST from CLIENT.
 
 ON-SUCCESS is of the form (lambda (response)).
 ON-FAILURE is of the form (lambda (error)).
-
-When non-nil SYNC, send request synchronously."
+BUFFER: When non-nil, override CLIENT `:buffer-context' (see `acp-make-client').
+SYNC: When non-nil, send request synchronously."
   (unless client
     (error ":client is required"))
   (unless request
@@ -285,6 +299,7 @@ When non-nil SYNC, send request synchronously."
     (map-put! client :request-id request-id)
     (map-put! client :pending-requests
               (cons (cons request-id `((:request . ,request)
+                                       (:buffer . ,buffer)
                                        (:on-success . ,on-success)
                                        (:on-failure . ,on-failure)))
                     (map-elt client :pending-requests)))
@@ -549,7 +564,11 @@ ON-REQUEST is of the form (lambda (request))."
        (acp--log-traffic client 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt incoming-response :on-success)
-           (funcall (map-elt incoming-response :on-success) .result)
+           (with-temp-buffer ;; Fallback to a temp buffer
+             (with-current-buffer (or (map-elt incoming-response :buffer)
+                                      (map-elt client :context-buffer)
+                                      (current-buffer))
+               (funcall (map-elt incoming-response :on-success) .result)))
          ;; TODO: Consolidate serialization.
          (acp--log client nil "Unhandled result:\n\n%s" message))
        t)
@@ -562,9 +581,14 @@ ON-REQUEST is of the form (lambda (request))."
        (acp--log-traffic client 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt incoming-response :on-failure)
-           (if (>= (cdr (func-arity (map-elt incoming-response :on-failure))) 2)
-               (funcall (map-elt incoming-response :on-failure) .error message)
-             (funcall (map-elt incoming-response :on-failure) .error))
+           (with-temp-buffer ;; Fallback to a temp buffer
+             (with-current-buffer (or (map-elt incoming-response :buffer)
+                                      (map-elt client :context-buffer)
+                                      (current-buffer))
+               (let ((callback (map-elt incoming-response :on-failure)))
+                 (if (>= (cdr (func-arity callback)) 2)
+                     (funcall callback .error message)
+                   (funcall callback .error)))))
          (acp--log client nil "Unhandled error:\n\n%s" message))
        t)
 
