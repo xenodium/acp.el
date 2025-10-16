@@ -314,6 +314,7 @@ SYNC: When non-nil, send request synchronously."
                         done 'error))))
     (acp--log client "OUTGOING OBJECT" "%s" request)
     (let ((json (acp--serialize-json request)))
+      (acp--log client "OUTGOING TEXT" "%s" json)
       (acp--log-traffic client 'outgoing 'request (acp--make-message :object request :json json))
       (process-send-string proc json))
     (when sync
@@ -374,6 +375,7 @@ When non-nil SYNC, send notification synchronously."
          (done nil))
     (acp--log client "OUTGOING OBJECT" "%s" notification)
     (let ((json (acp--serialize-json notification)))
+      (acp--log client "OUTGOING TEXT" "%s" json)
       (acp--log-traffic client 'outgoing 'notification (acp--make-message :object notification :json json))
       (process-send-string proc json))
     (when sync
@@ -637,7 +639,7 @@ Returns non-nil if error was parseable."
         (goto-char (point-max))
         (if label
             (insert label " >\n\n" (apply #'format format-string args) "\n\n")
-          (insert (apply #'format format-string args)))))))
+          (insert (apply #'format format-string args) "\n\n"))))))
 
 (defun acp--json-pretty-print (json)
   "Return a pretty-printed JSON string."
