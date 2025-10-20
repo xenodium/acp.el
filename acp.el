@@ -102,6 +102,8 @@ functions for advanced customization or testing."
   (when (acp--client-started-p client)
     (error "Client already started"))
   (let* ((pending-input "")
+         (message-queue nil)
+         (message-queue-busy nil)
          (process-environment (append (map-elt client :environment-variables)
                                       process-environment))
          (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
@@ -138,17 +140,36 @@ functions for advanced customization or testing."
                                                           (error
                                                            (acp--log client "JSON PARSE ERROR" "Invalid JSON: %s" json)
                                                            nil))))
-                                      (acp--route-incoming-message
-                                       :message (acp--make-message :json json :object object)
-                                       :client client
-                                       :on-notification
-                                       (lambda (notification)
-                                         (dolist (handler (map-elt client :notification-handlers))
-                                           (funcall handler notification)))
-                                       :on-request
-                                       (lambda (request)
-                                         (dolist (handler (map-elt client :request-handlers))
-                                           (funcall handler request))))))
+                                      (setq message-queue
+                                            (append message-queue
+                                                    (list (acp--make-message :json json :object object))))
+                                      (unless message-queue-busy
+                                        (setq message-queue-busy t)
+                                        (run-at-time 0 nil
+                                                     (lambda ()
+                                                       (while message-queue
+                                                         (let ((message (car message-queue)))
+                                                           (setq message-queue (cdr message-queue))
+                                                           (acp--route-incoming-message
+                                                            :message message
+                                                            :client client
+                                                            :on-notification
+                                                            (lambda (notification)
+                                                              (dolist (handler (map-elt client :notification-handlers))
+                                                                (condition-case-unless-debug err
+                                                                    (funcall handler notification)
+                                                                  (error
+                                                                   (acp--log client "NOTIFICATION HANDLER ERROR"
+                                                                             "Failed with error: %S" err)))))
+                                                            :on-request
+                                                            (lambda (request)
+                                                              (dolist (handler (map-elt client :request-handlers))
+                                                                (condition-case-unless-debug err
+                                                                    (funcall handler request)
+                                                                  (error
+                                                                   (acp--log client "REQUEST HANDLER ERROR"
+                                                                             "Failed with error: %S" err))))))))
+                                                       (setq message-queue-busy nil))))))
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
                     :sentinel (lambda (_process _event)
