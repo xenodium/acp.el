@@ -450,6 +450,22 @@ and https://agentclientprotocol.com/protocol/schema#promptresponse."
     (:params . ((sessionId . ,session-id)
                 (prompt . ,(vconcat prompt))))))
 
+(cl-defun acp-make-session-set-mode-request (&key session-id mode-id)
+  "Instantiate a \"session/set_mode\" request.
+
+SESSION-ID is the ID of the session to change the mode for.
+MODE-ID is the mode to set (e.g., \"default\", \"plan\", \"acceptEdits\",
+\"bypassPermissions\").
+
+See https://agentclientprotocol.com/protocol/session-modes"
+  (unless session-id
+    (error ":session-id is required"))
+  (unless mode-id
+    (error ":mode-id is required"))
+  `((:method . "session/set_mode")
+    (:params . ((sessionId . ,session-id)
+                (modeId . ,mode-id)))))
+
 (cl-defun acp-make-session-request-permission-response (&key request-id option-id)
   "Instantiate a \"session/request_permission\" response.
 
