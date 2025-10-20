@@ -4,9 +4,9 @@
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/acp.el
-;; Version: 0.5.1
+;; Version: 0.5.2
 
-(defconst acp-package-version "0.5.1")
+(defconst acp-package-version "0.5.2")
 
 ;; This package is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
