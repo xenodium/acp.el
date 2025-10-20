@@ -691,9 +691,10 @@ Returns non-nil if error was parseable."
   "Log CLIENT traffic MESSAGE to \"*acp traffic*\" buffer.
 KIND may be `request', `response', or `notification'.
 DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
-  (acp-traffic-log-traffic
-   :buffer (acp-traffic-buffer :client client)
-   :direction direction :kind kind :message message))
+  (when acp-logging-enabled
+    (acp-traffic-log-traffic
+     :buffer (acp-traffic-buffer :client client)
+     :direction direction :kind kind :message message)))
 
 (defun acp--show-json-object (object)
   "Display OBJECT in a pretty-printed buffer."
