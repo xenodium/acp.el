@@ -487,20 +487,25 @@ See https://agentclientprotocol.com/protocol/session-modes"
     (:params . ((sessionId . ,session-id)
                 (modeId . ,mode-id)))))
 
-(cl-defun acp-make-session-request-permission-response (&key request-id option-id)
+(cl-defun acp-make-session-request-permission-response (&key request-id option-id cancelled)
   "Instantiate a \"session/request_permission\" response.
 
 REQUEST-ID is the ID of the request this is a response to.
 OPTION-ID is the ID of the option selected by the user.
+CANCELLED is non-nil if the response represents a cancelled request.
 
 See https://agentclientprotocol.com/protocol/schema#requestpermissionresponse."
   (unless request-id
     (error ":request-id is required"))
-  (unless option-id
-    (error ":option-id is required"))
+  (when (and option-id cancelled)
+    (error "Choose :option-id or :cancelled Not both"))
+  (unless (or option-id cancelled)
+    (error "Must specify either :option-id or :cancelled"))
   `((:request-id . ,request-id)
-    (:result . ((outcome . ((outcome . "selected")
-                            (optionId . ,option-id)))))))
+    (:result . ((outcome . ,(if cancelled
+                                 '((outcome . "cancelled"))
+                               `((outcome . "selected")
+                                 (optionId . ,option-id))))))))
 
 (cl-defun acp-make-fs-read-text-file-response (&key request-id content error)
   "Instantiate a \"fs/read_text_file\" response.
