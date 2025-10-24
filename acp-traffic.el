@@ -20,18 +20,7 @@
 
 ;;; Commentary:
 ;;
-;; acp.el implements ACP (Agent Client Protocol) as per spec
-;; https://agentclientprotocol.com
-;;
-;; Note: This package is in the very early stage and is likely
-;; incomplete or may have some rough edges.
-;;
-;; Report issues at https://github.com/xenodium/acp.el/issues
-;;
-;; ✨ Please support this work https://github.com/sponsors/xenodium ✨
-
-;;; Commentary:
-;;
+;; acp-traffic enable viewing all ACP traffic passing through acp.el.
 
 ;;; Code:
 
@@ -56,7 +45,7 @@
 (defun acp-traffic-save-to ()
   "Save traffic objects to a file."
   (interactive)
-  (unless (eq major-mode 'acp-traffic-mode)
+  (unless (derived-mode-p 'acp-traffic-mode)
     (user-error "Not in a traffic buffer"))
   (let* ((destination (read-file-name "Save traffic to: " nil "yolo.traffic"))
          (objects (acp-traffic--objects)))
@@ -113,10 +102,10 @@
       (acp-traffic-display-objects objects)
     (error "Nothing to view")))
 
-(defun apc-traffic-display-all-entries ()
+(defun acp-traffic-display-all-entries ()
   "Display all entries expanded."
   (interactive)
-  (unless (eq major-mode 'acp-traffic-mode)
+  (unless (derived-mode-p 'acp-traffic-mode)
     (user-error "Not in a traffic buffer"))
   (save-excursion
     (goto-char (point-min))
@@ -163,7 +152,7 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
       (with-current-buffer buffer
         (goto-char (point-max))
         (let* ((object (map-elt message :object))
-               (timestamp (format-time-string "%H:%M:%S.%3N"))
+               (timestamp (format-time-string "%T.%3N"))
                (method (map-elt object 'method))
                (has-result (map-elt object 'result))
                (has-error (map-elt object 'error))
@@ -198,7 +187,7 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
 
 (defun acp-traffic--objects ()
   "Extract all the traffic objects from current traffic buffer."
-  (unless (eq major-mode 'acp-traffic-mode)
+  (unless (derived-mode-p 'acp-traffic-mode)
     (user-error "Not in a traffic buffer"))
   (save-excursion
     (goto-char (point-min))

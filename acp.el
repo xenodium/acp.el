@@ -5,6 +5,7 @@
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/acp.el
 ;; Version: 0.6.1
+;; Package-Requires: ((emacs "28.1"))
 
 (defconst acp-package-version "0.6.1")
 
