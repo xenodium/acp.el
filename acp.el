@@ -746,7 +746,7 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
 
 (defun acp--parse-json (json)
   "Parse JSON using a consistent configuration."
-  (json-parse-string json :object-type 'alist :null-object nil))
+  (json-parse-string json :object-type 'alist :null-object nil :false-object nil))
 
 (defun acp--serialize-json (object)
   "Serialize OBJECT to JSON using a consistent configuration."
