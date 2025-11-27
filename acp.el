@@ -436,16 +436,18 @@ and https://agentclientprotocol.com/protocol/schema#initializeresponse."
                                                                     t
                                                                   :false))))))))))
 
-(cl-defun acp-make-authenticate-request (&key method-id)
+(cl-defun acp-make-authenticate-request (&key method-id method)
   "Instantiate an \"authenticate\" request.
 
-METHOD-ID is the authentication method to use.
+METHOD-ID and METHOD (optionally) for authentication method to use.
 
 See https://agentclientprotocol.com/protocol/schema#authenticaterequest."
   (unless method-id
     (error ":method-id is required"))
   `((:method . "authenticate")
-    (:params . ((methodId . ,method-id)))))
+    (:params . ,(append `((methodId . ,method-id))
+                        (when method
+                          `((authMethod . ,method)))))))
 
 (cl-defun acp-make-session-new-request (&key cwd mcp-servers)
   "Instantiate a \"session/new\" request.
