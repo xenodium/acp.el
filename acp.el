@@ -4,10 +4,10 @@
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/acp.el
-;; Version: 0.7.3
+;; Version: 0.8.1
 ;; Package-Requires: ((emacs "28.1"))
 
-(defconst acp-package-version "0.7.3")
+(defconst acp-package-version "0.8.1")
 
 ;; This package is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -494,6 +494,23 @@ See https://agentclientprotocol.com/protocol/session-modes"
   `((:method . "session/set_mode")
     (:params . ((sessionId . ,session-id)
                 (modeId . ,mode-id)))))
+
+(cl-defun acp-make-session-set-model-request (&key session-id model-id)
+  "Instantiate a \"session/set_model\" request.
+
+SESSION-ID is the ID of the session to change the model for.
+MODEL-ID is the model to set (e.g., \"default\", \"haiku\").
+
+This is a claude-code-acp extension to the ACP protocol.
+
+See https://docs.claude.com/en/api/agent-sdk/typescript"
+  (unless session-id
+    (error ":session-id is required"))
+  (unless model-id
+    (error ":model-id is required"))
+  `((:method . "session/set_model")
+    (:params . ((sessionId . ,session-id)
+                (modelId . ,model-id)))))
 
 (cl-defun acp-make-session-request-permission-response (&key request-id option-id cancelled)
   "Instantiate a \"session/request_permission\" response.
