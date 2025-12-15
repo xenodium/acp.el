@@ -253,15 +253,16 @@ Note: These are agent process errors.
   "Shutdown ACP CLIENT and release resources."
   (unless client
     (error ":client is required"))
-  (unless (and (or (not (map-elt client :process))
-                   (process-live-p (map-elt client :process)))
-               (buffer-live-p (acp-logs-buffer :client client))
-               (buffer-live-p (acp-traffic-buffer :client client)))
-    (error "Client already shut down"))
-  (when (process-live-p (map-elt client :process))
-    (delete-process (map-elt client :process)))
-  (kill-buffer (acp-logs-buffer :client client))
-  (kill-buffer (acp-traffic-buffer :client client)))
+  (if (and (or (not (map-elt client :process))
+               (process-live-p (map-elt client :process)))
+           (buffer-live-p (acp-logs-buffer :client client))
+           (buffer-live-p (acp-traffic-buffer :client client)))
+      (progn
+        (when (process-live-p (map-elt client :process))
+          (delete-process (map-elt client :process)))
+        (kill-buffer (acp-logs-buffer :client client))
+        (kill-buffer (acp-traffic-buffer :client client)))
+    (message "Client already shut down")))
 
 (cl-defun acp-send-request (&key client request buffer on-success on-failure sync)
   "Send REQUEST from CLIENT.
