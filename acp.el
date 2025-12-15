@@ -117,7 +117,14 @@ functions for advanced customization or testing."
                        :buffer stderr-buffer
                        :filter (lambda (_process raw-output)
                                  (acp--log client "STDERR" "%s" (string-trim raw-output))
-                                 (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
+                                 (let ((api-error (cond
+                                                   ((acp--parse-stderr-api-error raw-output)
+                                                    (acp--parse-stderr-api-error raw-output))
+                                                   (t
+                                                    ;; Fallback: create a generic error response
+                                                    `((code . -32603)
+                                                      (message . "Internal error")
+                                                      (data . ((details . ,raw-output))))))))
                                    (acp--log client "API-ERROR" "%s" (string-trim raw-output))
                                    (dolist (handler (map-elt client :error-handlers))
                                      (funcall handler api-error)))))))
