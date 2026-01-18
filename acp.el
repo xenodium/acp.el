@@ -375,13 +375,18 @@ SYNC: When non-nil, send request synchronously."
   (unless response
     (error ":response is required"))
   (let* ((request-id (map-elt response :request-id))
-         (result-data (map-elt response :result)))
+         (result-data (map-elt response :result))
+         (error-data (map-elt response :error)))
     (map-put! client :request-id (or request-id
                                      (1+ (map-elt client :request-id))))
     (let* ((proc (map-elt client :process))
-           (response `((jsonrpc . ,acp--jsonrpc-version)
-                       (id . ,request-id)
-                       (result . ,result-data))))
+           (response (if error-data
+                         `((jsonrpc . ,acp--jsonrpc-version)
+                           (id . ,request-id)
+                           (error . ,error-data))
+                       `((jsonrpc . ,acp--jsonrpc-version)
+                         (id . ,request-id)
+                         (result . ,result-data)))))
       (let ((json (acp--serialize-json response)))
         (acp--log-traffic client 'outgoing 'response (acp--make-message :object response :json json))
         (process-send-string proc json)))))
