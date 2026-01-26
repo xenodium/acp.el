@@ -45,6 +45,7 @@
 ;; TRAMP variables for remote process execution
 (defvar tramp-use-ssh-controlmaster-options)
 (defvar tramp-ssh-controlmaster-options)
+(defvar tramp-direct-async-process)
 
 (defconst acp--jsonrpc-version "2.0")
 
@@ -136,9 +137,12 @@ functions for advanced customization or testing."
                                      (dolist (handler (map-elt client :error-handlers))
                                        (funcall handler std-error))))))))
     ;; Disable SSH ControlMaster for TRAMP - it can't handle large data (see eglot bug#61350)
-    (let ((tramp-use-ssh-controlmaster-options (if use-file-handler 'suppress tramp-use-ssh-controlmaster-options))
-          (tramp-ssh-controlmaster-options (if use-file-handler "-o ControlMaster=no -o ControlPath=none" tramp-ssh-controlmaster-options)))
-      (let ((process (make-process
+    ;; Disable direct async process for TRAMP - it breaks process filters (see lsp-mode#4573)
+    (cl-letf (((symbol-function 'tramp-direct-async-process-p)
+               (lambda (&rest _) nil)))
+      (let ((tramp-use-ssh-controlmaster-options (if use-file-handler 'suppress tramp-use-ssh-controlmaster-options))
+            (tramp-ssh-controlmaster-options (if use-file-handler "-o ControlMaster=no -o ControlPath=none" tramp-ssh-controlmaster-options)))
+        (let ((process (make-process
                       :name (format "acp-client(%s)-%s"
                                     (map-elt client :command)
                                     (map-elt client :instance-count))
@@ -198,7 +202,10 @@ functions for advanced customization or testing."
                                   (delete-process stderr-proc))
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))))))
-      (map-put! client :process process)))))
+          ;; For TRAMP connections, wait a moment for the SSH connection to fully establish
+          (when use-file-handler
+            (accept-process-output process 0.1))
+          (map-put! client :process process))))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.
