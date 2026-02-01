@@ -425,11 +425,14 @@ When non-nil SYNC, send notification synchronously."
         result))))
 
 (cl-defun acp-make-initialize-request (&key protocol-version
+                                            client-info
                                             read-text-file-capability
                                             write-text-file-capability)
   "Instantiate an \"initialize\" request.
 
 PROTOCOL-VERSION is the version of the ACP protocol to use.
+CLIENT-INFO is an optional alist with client information containing
+keys like `name', `title', and `version'.
 READ-TEXT-FILE-CAPABILITY is a boolean indicating if the client
 can read text files.
 WRITE-TEXT-FILE-CAPABILITY is a boolean indicating if the client
@@ -440,7 +443,9 @@ and https://agentclientprotocol.com/protocol/schema#initializeresponse."
   (unless protocol-version
     (error ":protocol-version is required"))
   `((:method . "initialize")
-    (:params . ((protocolVersion . ,protocol-version)
+    (:params . (,@(when client-info
+                    `((clientInfo . ,client-info)))
+                (protocolVersion . ,protocol-version)
                 (clientCapabilities . ((fs . ((readTextFile . ,(if read-text-file-capability
                                                                    t
                                                                  :false))
