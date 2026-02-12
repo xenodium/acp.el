@@ -441,11 +441,16 @@ See https://agentclientprotocol.com/protocol/schema#authenticaterequest."
   `((:method . "authenticate")
     (:params . ((methodId . ,method-id)))))
 
-(cl-defun acp-make-session-new-request (&key cwd mcp-servers)
+(cl-defun acp-make-session-new-request (&key cwd mcp-servers meta)
   "Instantiate a \"session/new\" request.
 
 CWD is the current working directory for the session.
 MCP-SERVERS is a list of MCP servers to use.
+META is an optional alist of metadata to pass to the agent.
+  Supported keys include:
+  - `systemPrompt': Either a string (replaces default) or
+    an alist with key `append' containing a string to append
+    to the default system prompt.
 
 See https://agentclientprotocol.com/protocol/schema#newsessionrequest
 and https://agentclientprotocol.com/protocol/schema#newsessionresponse."
@@ -453,7 +458,8 @@ and https://agentclientprotocol.com/protocol/schema#newsessionresponse."
     (error ":cwd is required"))
   `((:method . "session/new")
     (:params . ((cwd . ,(expand-file-name cwd))
-                (mcpServers . ,(or mcp-servers []))))))
+                (mcpServers . ,(or mcp-servers []))
+                ,@(when meta `((_meta . ,meta)))))))
 
 (cl-defun acp-make-session-prompt-request (&key session-id prompt)
   "Instantiate a \"session/prompt\" request.
