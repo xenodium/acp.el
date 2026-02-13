@@ -482,7 +482,8 @@ and https://agentclientprotocol.com/protocol/schema#newsessionresponse."
   (unless cwd
     (error ":cwd is required"))
   `((:method . "session/new")
-    (:params . ((cwd . ,(expand-file-name cwd))
+    ;; directory-file-name removes any trailing /
+    (:params . ((cwd . ,(directory-file-name (expand-file-name cwd)))
                 (mcpServers . ,(or mcp-servers []))
                 ,@(when meta `((_meta . ,meta)))))))
 
@@ -548,16 +549,61 @@ This method resumes an existing session without returning previous messages
 
 Note: This is an unstable ACP feature.
 
-See https://agentclientprotocol.com/protocol/schema#resumesessionrequest
-and https://agentclientprotocol.com/protocol/schema#resumesessionresponse."
+See https://agentclientprotocol.com/rfds/session-resume."
   (unless session-id
     (error ":session-id is required"))
   (unless cwd
     (error ":cwd is required"))
   `((:method . "session/resume")
     (:params . ((sessionId . ,session-id)
-                (cwd . ,(expand-file-name cwd))
+                ;; directory-file-name removes any trailing /
+                (cwd . ,(directory-file-name (expand-file-name cwd)))
                 (mcpServers . ,(or mcp-servers []))))))
+
+(cl-defun acp-make-session-list-request (&key cwd)
+  "Instantiate a \"session/list\" request.
+
+CWD is the current working directory used to filter sessions.
+
+Note: This is an unstable ACP feature.
+
+See https://agentclientprotocol.com/rfds/session-list."
+  (unless cwd
+    (error ":cwd is required"))
+  `((:method . "session/list")
+    ;; directory-file-name removes any trailing /
+    (:params . ((cwd . ,(directory-file-name (expand-file-name cwd)))))))
+
+(cl-defun acp-make-session-load-request (&key session-id cwd mcp-servers)
+  "Instantiate a \"session/load\" request.
+
+SESSION-ID is the ID of the session to load.
+CWD is the current working directory for the loaded session.
+MCP-SERVERS is an optional list of MCP servers to use.
+
+See https://agentclientprotocol.com/protocol/schema#session-load."
+  (unless session-id
+    (error ":session-id is required"))
+  (unless cwd
+    (error ":cwd is required"))
+  `((:method . "session/load")
+    (:params . ((sessionId . ,session-id)
+                ;; directory-file-name removes any trailing /
+                (cwd . ,(directory-file-name (expand-file-name cwd)))
+                (mcpServers . ,(or mcp-servers []))))))
+
+(cl-defun acp-make-session-delete-request (&key session-id)
+  "Instantiate a \"session/delete\" request.
+
+SESSION-ID is the ID of the session to delete.
+
+Note: This is an unstable ACP feature.
+
+See https://agentclientprotocol.com/rfds/session-delete."
+  (unless session-id
+    (error ":session-id is required"))
+  `((:method . "session/delete")
+    (:params . ((sessionId . ,session-id)))))
 
 (cl-defun acp-make-session-request-permission-response (&key request-id option-id cancelled)
   "Instantiate a \"session/request_permission\" response.
