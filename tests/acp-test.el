@@ -5,11 +5,20 @@
 ;;
 ;; The trimming logic should enforce byte limits while preserving whole
 ;; log messages using boundary markers.
+;;
+;; ERT tests for ACP request construction, focusing on terminal and meta
+;; capability handling in initialize requests.
+;;
+;; Intended to run in batch mode without loading user init files.
 
 ;;; Code:
 
 (require 'ert)
 (setq load-prefer-newer t)
+
+(let ((acp-test--root (expand-file-name ".." (file-name-directory (or load-file-name buffer-file-name)))))
+  (add-to-list 'load-path acp-test--root))
+
 (require 'acp)
 
 (defun acp-test--format-log-message (message)
@@ -62,6 +71,55 @@
     (should (< max-bytes bytes-m2m3))
     (should (equal result log3))
     (should (<= (string-bytes result) max-bytes))))
+
+(ert-deftest test-acp-make-initialize-request-omits-terminal-and-meta-when-nil ()
+  "Ensure terminal and _meta are omitted when capabilities are nil."
+  (let* ((request (acp-make-initialize-request
+                   :protocol-version 1
+                   :read-text-file-capability t
+                   :write-text-file-capability nil))
+         (params (alist-get :params request))
+         (caps (alist-get 'clientCapabilities params))
+         (fs (alist-get 'fs caps)))
+    (should (equal (alist-get 'readTextFile fs) t))
+    (should (equal (alist-get 'writeTextFile fs) :false))
+    (should-not (assoc 'terminal caps))
+    (should-not (assoc '_meta caps))))
+
+(ert-deftest test-acp-make-initialize-request-terminal-true ()
+  "Ensure terminal capability is set to t when enabled."
+  (let* ((request (acp-make-initialize-request
+                   :protocol-version 1
+                   :read-text-file-capability t
+                   :write-text-file-capability t
+                   :terminal-capability t))
+         (params (alist-get :params request))
+         (caps (alist-get 'clientCapabilities params)))
+    (should (equal (alist-get 'terminal caps) t))))
+
+(ert-deftest test-acp-make-initialize-request-terminal-false ()
+  "Ensure terminal capability is included as :false when disabled."
+  (let* ((request (acp-make-initialize-request
+                   :protocol-version 1
+                   :read-text-file-capability t
+                   :write-text-file-capability t
+                   :terminal-capability :false))
+         (params (alist-get :params request))
+         (caps (alist-get 'clientCapabilities params)))
+    (should (equal (alist-get 'terminal caps) :false))))
+
+(ert-deftest test-acp-make-initialize-request-meta-capabilities ()
+  "Ensure meta capabilities are sent under the _meta key."
+  (let* ((meta '((streaming . t)
+                 (transport . "terminal")))
+         (request (acp-make-initialize-request
+                   :protocol-version 1
+                   :read-text-file-capability t
+                   :write-text-file-capability t
+                   :meta-capabilities meta))
+         (params (alist-get :params request))
+         (caps (alist-get 'clientCapabilities params)))
+    (should (equal (alist-get '_meta caps) meta))))
 
 (provide 'acp-test)
 
