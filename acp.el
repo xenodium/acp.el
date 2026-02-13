@@ -535,6 +535,30 @@ See https://docs.claude.com/en/api/agent-sdk/typescript"
     (:params . ((sessionId . ,session-id)
                 (modelId . ,model-id)))))
 
+(cl-defun acp-make-session-resume-request (&key session-id cwd mcp-servers)
+  "Instantiate a \"session/resume\" request.
+
+SESSION-ID is the ID of the session to resume.
+CWD is the current working directory for the resumed session.
+MCP-SERVERS is an optional list of MCP servers to use.
+
+This method resumes an existing session without returning previous messages
+\(unlike `session/load').  Only available if the agent advertises the
+`session.resume' capability.
+
+Note: This is an unstable ACP feature.
+
+See https://agentclientprotocol.com/protocol/schema#resumesessionrequest
+and https://agentclientprotocol.com/protocol/schema#resumesessionresponse."
+  (unless session-id
+    (error ":session-id is required"))
+  (unless cwd
+    (error ":cwd is required"))
+  `((:method . "session/resume")
+    (:params . ((sessionId . ,session-id)
+                (cwd . ,(expand-file-name cwd))
+                (mcpServers . ,(or mcp-servers []))))))
+
 (cl-defun acp-make-session-request-permission-response (&key request-id option-id cancelled)
   "Instantiate a \"session/request_permission\" response.
 
