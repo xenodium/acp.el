@@ -802,17 +802,59 @@ Returns non-nil if error was parseable."
               (error nil)))
         (error nil)))))
 
-(defun acp--log (client label format-string &rest args)
-  "Log CLIENT message using LABEL, FORMAT-STRING, and ARGS."
+(defun acp--format-log-message (label format-string &rest args)
+  "Return a log message formatted like `acp--log'.
+LABEL, FORMAT-STRING, and ARGS are passed to `format'."
   (unless format-string
     (error ":format-string is required"))
+  (let ((body (apply #'format format-string args)))
+    (if label
+        (format "%s >\n\n%s\n\n" label body)
+      (format "%s\n\n" body))))
+
+(defun acp--insert-log-entry (label format-string &rest args)
+  "Insert a log message at point and add a boundary marker.
+LABEL, FORMAT-STRING, and ARGS are passed to `format'."
+  (let ((entry-start (point)))
+    (insert (apply #'acp--format-log-message label format-string args))
+    (when (< entry-start (point))
+      (add-text-properties entry-start (1+ entry-start)
+                           '(acp-log-boundary t)))))
+
+(defun acp--log (client label format-string &rest args)
+  "Log CLIENT message using LABEL, FORMAT-STRING, and ARGS."
   (when acp-logging-enabled
     (let ((log-buffer (acp-logs-buffer :client client)))
       (with-current-buffer log-buffer
         (goto-char (point-max))
-        (if label
-            (insert label " >\n\n" (apply #'format format-string args) "\n\n")
-          (insert (apply #'format format-string args) "\n\n"))))))
+        (apply #'acp--insert-log-entry label format-string args))
+      (acp--trim-log-buffer log-buffer))))
+
+(defvar acp--log-buffer-max-bytes (* 100 1000 1000)
+  "Maximum size of the log buffer in bytes.")
+
+(defun acp--total-buffer-bytes (buffer)
+  "Return the total number of bytes in BUFFER."
+  (with-current-buffer buffer
+    (save-restriction
+      (widen)
+      (1- (position-bytes (point-max))))))
+
+(defun acp--trim-log-buffer (buffer &optional max-bytes)
+  "Trim BUFFER to a maximum size in bytes at log message boundaries.
+MAX-BYTES defaults to `acp--log-buffer-max-bytes'."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (save-excursion
+        (let ((max-bytes (or max-bytes acp--log-buffer-max-bytes))
+              (total-bytes (acp--total-buffer-bytes (current-buffer))))
+          (when (< max-bytes total-bytes)
+            (goto-char (byte-to-position (- total-bytes max-bytes)))
+            (when (get-text-property (point) 'acp-log-boundary)
+              (forward-char 1))
+            (delete-region (point-min)
+                           (next-single-property-change
+                            (point) 'acp-log-boundary nil (point-max)))))))))
 
 (defun acp--json-pretty-print (json)
   "Return a pretty-printed JSON string."
