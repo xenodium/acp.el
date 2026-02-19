@@ -42,6 +42,11 @@
   (require 'cl-lib))
 (require 'acp-traffic)
 
+;; TRAMP variables for remote process execution
+(defvar tramp-use-ssh-controlmaster-options)
+(defvar tramp-ssh-controlmaster-options)
+(defvar tramp-direct-async-process)
+
 (defconst acp--jsonrpc-version "2.0")
 
 (defvar acp-logging-enabled nil)
@@ -105,7 +110,7 @@ the error is logged."
     (error ":client is required"))
   (unless (map-elt client :command)
     (error ":command is required"))
-  (unless (executable-find (map-elt client :command))
+  (unless (executable-find (map-elt client :command) (file-remote-p default-directory))
     (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
   (when (acp--client-started-p client)
     (error "Client already started"))
@@ -117,39 +122,52 @@ the error is logged."
          (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
                                                    (map-elt client :command)
                                                    (map-elt client :instance-count))))
-         (stderr-proc (make-pipe-process
-                       :name (format "acp-client-stderr(%s)-%s"
-                                     (map-elt client :command)
-                                     (map-elt client :instance-count))
-                       :buffer stderr-buffer
-                       :filter (lambda (_process raw-output)
-                                 (acp--log client "STDERR" "%s" (string-trim raw-output))
-                                 (when-let ((std-error (cond
-                                                        ((acp--parse-stderr-api-error raw-output)
-                                                         (acp--parse-stderr-api-error raw-output))
-                                                        ((not (string-empty-p (string-trim raw-output)))
-                                                         ;; Fallback: create a generic error response
-                                                         `((code . -32603)
-                                                           (message . ,raw-output))))))
-                                   (acp--log client "API-ERROR" "%s" (string-trim raw-output))
-                                   (dolist (handler (map-elt client :error-handlers))
-                                     (funcall handler std-error)))))))
-    (let ((process (make-process
-                    :name (format "acp-client(%s)-%s"
-                                  (map-elt client :command)
-                                  (map-elt client :instance-count))
-                    :command (cons (map-elt client :command)
-                                   (map-elt client :command-params))
-                    :stderr stderr-proc
-                    :connection-type 'pipe
-                    :filter (lambda (_proc input)
-                              (acp--log client "INCOMING TEXT" "%s" input)
-                              (setq pending-input (concat pending-input input))
-                              (let ((start 0) pos)
-                                (while (setq pos (string-search "\n" pending-input start))
-                                  (let ((json (substring pending-input start pos)))
-                                    (acp--log client "INCOMING LINE" "%s" json)
-                                    (when-let* ((object (condition-case nil
+         ;; For TRAMP (file-handler), we can only use a buffer for stderr.
+         ;; For local execution, we use a pipe process for live error parsing.
+         (use-file-handler (file-remote-p default-directory))
+         (stderr-proc (unless use-file-handler
+                        (make-pipe-process
+                         :name (format "acp-client-stderr(%s)-%s"
+                                       (map-elt client :command)
+                                       (map-elt client :instance-count))
+                         :buffer stderr-buffer
+                         :filter (lambda (_process raw-output)
+                                   (acp--log client "STDERR" "%s" (string-trim raw-output))
+                                   (when-let ((std-error (cond
+                                                          ((acp--parse-stderr-api-error raw-output)
+                                                           (acp--parse-stderr-api-error raw-output))
+                                                          ((not (string-empty-p (string-trim raw-output)))
+                                                           ;; Fallback: create a generic error response
+                                                           `((code . -32603)
+                                                             (message . ,raw-output))))))
+                                     (acp--log client "API-ERROR" "%s" (string-trim raw-output))
+                                     (dolist (handler (map-elt client :error-handlers))
+                                       (funcall handler std-error))))))))
+    ;; Disable SSH ControlMaster for TRAMP - it can't handle large data (see eglot bug#61350)
+    ;; Disable direct async process for TRAMP - it breaks process filters (see lsp-mode#4573)
+    (cl-letf (((symbol-function 'tramp-direct-async-process-p)
+               (lambda (&rest _) nil)))
+      (let ((tramp-use-ssh-controlmaster-options (if use-file-handler 'suppress tramp-use-ssh-controlmaster-options))
+            (tramp-ssh-controlmaster-options (if use-file-handler "-o ControlMaster=no -o ControlPath=none" tramp-ssh-controlmaster-options)))
+        (let ((process (make-process
+                      :name (format "acp-client(%s)-%s"
+                                    (map-elt client :command)
+                                    (map-elt client :instance-count))
+                      :command (cons (map-elt client :command)
+                                     (map-elt client :command-params))
+                      :stderr (or stderr-proc stderr-buffer)
+                      :connection-type 'pipe
+                      :coding 'utf-8-emacs-unix
+                      :noquery t
+                      :file-handler use-file-handler
+                      :filter (lambda (_proc input)
+                                (acp--log client "INCOMING TEXT" "%s" input)
+                                (setq pending-input (concat pending-input input))
+                                (let ((start 0) pos)
+                                  (while (setq pos (string-search "\n" pending-input start))
+                                    (let ((json (substring pending-input start pos)))
+                                      (acp--log client "INCOMING LINE" "%s" json)
+                                      (when-let* ((object (condition-case nil
                                                             (acp--parse-json json)
                                                           (error
                                                            (acp--log client "JSON PARSE ERROR" "Invalid JSON: %s" json)
@@ -191,7 +209,10 @@ the error is logged."
                                   (delete-process stderr-proc))
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))))))
-      (map-put! client :process process))))
+          ;; For TRAMP connections, wait a moment for the SSH connection to fully establish
+          (when use-file-handler
+            (accept-process-output process 0.1))
+          (map-put! client :process process))))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.
