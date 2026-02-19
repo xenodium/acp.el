@@ -895,9 +895,15 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
 
 (cl-defun acp-logs-buffer (&key client)
   "Get CLIENT logs buffer."
-  (get-buffer-create (format "*acp-(%s)-%s log*"
-                             (map-elt client :command)
-                             (map-elt client :instance-count))))
+  (if-let* ((name
+             (format "*acp-(%s)-%s log*"
+                     (map-elt client :command)
+                     (map-elt client :instance-count)))
+            (buffer (get-buffer name)))
+      buffer
+    (with-current-buffer (get-buffer-create name)
+      (buffer-disable-undo)
+      (current-buffer))))
 
 (cl-defun acp-traffic-buffer (&key client)
   "Get CLIENT traffic buffer."
