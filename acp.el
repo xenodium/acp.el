@@ -50,7 +50,7 @@
 
 (cl-defun acp-make-client (&key context-buffer command command-params environment-variables
                                 request-sender notification-sender request-resolver
-                                response-sender)
+                                response-sender outgoing-request-decorator)
   "Create an ACP client.
 
 This returns a alist representing the client.
@@ -68,7 +68,13 @@ COMMAND-PARAMS is a list of strings for command arguments.
 ENVIRONMENT-VARIABLES is a list of strings in the form \"VAR=foo\".
 
 REQUEST-SENDER, NOTIFICATION-SENDER, REQUEST-RESOLVER, and RESPONSE-SENDER are
-functions for advanced customization or testing."
+functions for advanced customization or testing.
+
+OUTGOING-REQUEST-DECORATOR is an optional function of the form
+\(lambda (request) ...) that receives the JSON-RPC request object
+before it is sent and returns a (possibly modified) request.
+If the decorator returns nil, the original request is sent and
+the error is logged."
   (unless command
     (error ":command is required"))
   (list (cons :context-buffer context-buffer)
@@ -85,7 +91,8 @@ functions for advanced customization or testing."
         (cons :request-sender (or request-sender #'acp--request-sender))
         (cons :notification-sender (or notification-sender #'acp--notification-sender))
         (cons :request-resolver (or request-resolver #'acp--request-resolver))
-        (cons :response-sender (or response-sender #'acp--response-sender))))
+        (cons :response-sender (or response-sender #'acp--response-sender))
+        (cons :outgoing-request-decorator outgoing-request-decorator)))
 
 (defun acp--client-started-p (client)
   "Return non-nil if CLIENT process has been started."
@@ -320,6 +327,12 @@ SYNC: When non-nil, send request synchronously."
     (error ":request is required"))
   (unless (acp--client-started-p client)
     (acp--start-client :client client))
+  (when-let ((decorator (map-elt client :outgoing-request-decorator)))
+    (if-let ((decorated (funcall decorator request)))
+        (setq request decorated)
+      (acp--log client "DECORATOR ERROR"
+                "Outgoing request decorator returned nil for \"%s\", sending original request"
+                (map-elt request :method))))
   (let* ((method (map-elt request :method))
          (params (map-elt request :params))
          (proc (map-elt client :process))
