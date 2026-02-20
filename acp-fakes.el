@@ -42,7 +42,7 @@ Eeach message is of the form:
                  :command "cat"
                  :command-params nil
                  :environment-variables nil
-                 :request-sender (cl-function (lambda (&key client request on-success on-failure _sync)
+                 :request-sender (cl-function (lambda (&key client request _buffer on-success on-failure _sync)
                                                 (acp-fakes--request-sender
                                                  :client client
                                                  :request request
@@ -94,7 +94,11 @@ Eeach message is of the form:
                              (lambda (msg)
                                (and (eq (map-elt msg :direction) 'incoming)
                                     (equal (map-elt (map-elt msg :object) 'id)
-                                           request-id)))
+                                           request-id)
+                                    ;; Must be a response (has result or error key),
+                                    ;; not an incoming request (has method key).
+                                    (or (map-contains-key (map-elt msg :object) 'result)
+                                        (map-contains-key (map-elt msg :object) 'error))))
                              message-queue)))
       (when response-message
         (setf (map-elt client :message-queue)
@@ -110,7 +114,7 @@ Eeach message is of the form:
           (setf (map-elt client :pending-requests)
                 (map-delete pending-requests request-id))
           (cond
-           ((and result on-success)
+           ((and on-success (map-contains-key response-obj 'result))
             (funcall on-success result)
             result)
            ((and error on-failure)
