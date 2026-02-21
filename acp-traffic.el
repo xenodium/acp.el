@@ -125,6 +125,7 @@ NAMED is required name to create buffer if needed."
   (if (get-buffer named)
       (get-buffer named)
     (with-current-buffer (get-buffer-create named)
+      (buffer-disable-undo)
       (acp-traffic-mode)
       (current-buffer))))
 
