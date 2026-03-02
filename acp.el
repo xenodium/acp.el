@@ -162,7 +162,16 @@ the error is logged."
                                         (run-at-time 0 nil
                                                      (lambda ()
                                                        (while message-queue
-                                                         (let ((message (car message-queue)))
+                                                         ;; Bind print variables so the debugger
+                                                         ;; can safely print the client alist
+                                                         ;; without infinite recursion (#360).
+                                                         (let ((message (car message-queue))
+                                                               ;; Handle circular refs in client alist.
+                                                               (print-circle t)
+                                                               ;; Cap nesting depth.
+                                                               (print-level 25)
+                                                               ;; Cap list elements printed.
+                                                               (print-length 200))
                                                            (setq message-queue (cdr message-queue))
                                                            (acp--route-incoming-message
                                                             :message message
