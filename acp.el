@@ -122,6 +122,7 @@ the error is logged."
                                      (map-elt client :command)
                                      (map-elt client :instance-count))
                        :buffer stderr-buffer
+                       :noquery t
                        :filter (lambda (_process raw-output)
                                  (acp--log client "STDERR" "%s" (string-trim raw-output))
                                  (when-let ((std-error (cond
@@ -142,6 +143,7 @@ the error is logged."
                                    (map-elt client :command-params))
                     :stderr stderr-proc
                     :connection-type 'pipe
+                    :noquery t
                     :filter (lambda (_proc input)
                               (acp--log client "INCOMING TEXT" "%s" input)
                               (setq pending-input (concat pending-input input))
