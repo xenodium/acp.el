@@ -1,5 +1,15 @@
-#+TITLE: acp.el
+#+TITLE: acp.el-plus
 #+AUTHOR: Álvaro Ramírez
+#+AUTHOR: Tim Visher
+
+A soft fork of [[https://github.com/xenodium/acp.el][acp.el]] with extra features on top.
+
+* Features on top of acp.el
+
+- CI workflow and local test runner (byte-compile + ERT tests on every push/PR)
+- =:terminal-capability= and =:meta-capabilities= parameters for =acp-make-initialize-request=
+
+-----
 
 * This project needs your funding
 
