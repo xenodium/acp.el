@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  readme-updated:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check README.org updated when code changes
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed_files=$(git diff --name-only "$base" "$head")
+
+          has_code_changes=false
+          for f in $changed_files; do
+            case "$f" in
+              *.el|tests/*) has_code_changes=true; break ;;
+            esac
+          done
+
+          if "$has_code_changes"; then
+            if ! echo "$changed_files" | grep -q '^README\.org$'; then
+              echo "::error::Code or test files changed but README.org was not updated."
+              echo "Please update the soft-fork features list in README.org."
+              exit 1
+            fi
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: purcell/setup-emacs@master
+        with:
+          version: 29.4
+
+      - name: Remove stale .elc files
+        run: find . -follow -name '*.elc' -print0 | xargs -0 rm -f
+
+      - name: Byte-compile
+        run: |
+          compile_files=()
+          for f in *.el; do
+            case "$f" in x.*|y.*|z.*) ;; *) compile_files+=("$f") ;; esac
+          done
+          emacs -Q --batch \
+            -L . \
+            -f batch-byte-compile \
+            "${compile_files[@]}"
+
+      - name: Run ERT tests
+        run: |
+          test_args=()
+          for f in tests/*-test.el; do
+            test_args+=(-l "$f")
+          done
+          emacs -Q --batch \
+            -L . -L tests \
+            "${test_args[@]}" \
+            -f ert-run-tests-batch-and-exit

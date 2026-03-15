@@ -1,0 +1,73 @@
+#!/usr/bin/env bash -O globstar -O extglob
+
+root=$(dirname "$0")/..
+tests_dir=${root}/tests
+
+shopt -s nullglob
+all_elc_files=("${root}"/**/*.elc)
+all_el_files=("${root}"/*.el)
+test_files=("${tests_dir}"/*-test.el)
+shopt -u nullglob
+
+if (( 0 < ${#all_elc_files[@]} ))
+then
+  rm -v "${all_elc_files[@]}"
+fi
+
+# Filter out x./y./z. prefixed scratch files from compilation
+compile_files=()
+for f in "${all_el_files[@]}"; do
+  case "$(basename "$f")" in
+    x.*|y.*|z.*) ;;
+    *) compile_files+=("$f") ;;
+  esac
+done
+
+if (( ${#compile_files[@]} < 1 )); then
+  echo "No compile targets found in ${root}" >&2
+  exit 1
+fi
+
+if (( ${#test_files[@]} < 1 )); then
+  echo "No test files found in ${tests_dir}" >&2
+  exit 1
+fi
+
+test_args=()
+for file in "${test_files[@]}"; do
+  test_args+=(-l "$file")
+done
+
+emacs -Q --batch \
+  -L "${root}" \
+  -f batch-byte-compile \
+  "${compile_files[@]}"
+
+emacs -Q --batch \
+  -L "${root}" \
+  -L "${tests_dir}" \
+  "${test_args[@]}" \
+  -f ert-run-tests-batch-and-exit
+
+# --- README update check (mirrors CI readme-updated job) ---
+# Compare against main (or merge-base) to see if code changed without
+# a corresponding README.org update.
+base=$(git -C "${root}" merge-base HEAD main 2>/dev/null) || true
+if [[ -n ${base} ]]
+then
+  changed_files=$(git -C "${root}" diff --name-only "${base}" HEAD)
+  has_code_changes=false
+  for f in ${changed_files}; do
+    case "${f}" in
+      *.el|tests/*) has_code_changes=true; break ;;
+    esac
+  done
+
+  if "${has_code_changes}"; then
+    if ! echo "${changed_files}" | grep -q '^README\.org$'; then
+      echo "ERROR: Code or test files changed but README.org was not updated." >&2
+      echo "Please update the soft-fork features list in README.org." >&2
+      exit 1
+    fi
+  fi
+fi
