@@ -403,8 +403,6 @@ SYNC: When non-nil, send request synchronously."
   (let* ((request-id (map-elt response :request-id))
          (result-data (map-elt response :result))
          (error-data (map-elt response :error)))
-    (map-put! client :request-id (or request-id
-                                     (1+ (map-elt client :request-id))))
     (let* ((proc (map-elt client :process))
            (response (if error-data
                          `((jsonrpc . ,acp--jsonrpc-version)
