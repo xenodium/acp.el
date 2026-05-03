@@ -560,6 +560,25 @@ See https://docs.claude.com/en/api/agent-sdk/typescript"
     (:params . ((sessionId . ,session-id)
                 (modelId . ,model-id)))))
 
+(cl-defun acp-make-session-set-config-option-request (&key session-id config-id value)
+  "Instantiate a \"session/set_config_option\" request.
+
+SESSION-ID is the ID of the session to change the config option for.
+CONFIG-ID is the id of the configuration option to change.
+VALUE is the new value, must correspond to one of the option's values.
+
+See https://agentclientprotocol.com/protocol/session-config-options"
+  (unless session-id
+    (error ":session-id is required"))
+  (unless config-id
+    (error ":config-id is required"))
+  (unless value
+    (error ":value is required"))
+  `((:method . "session/set_config_option")
+    (:params . ((sessionId . ,session-id)
+                (configId . ,config-id)
+                (value . ,value)))))
+
 (cl-defun acp-make-session-resume-request (&key session-id cwd mcp-servers)
   "Instantiate a \"session/resume\" request.
 
