@@ -105,7 +105,8 @@ the error is logged."
     (error ":client is required"))
   (unless (map-elt client :command)
     (error ":command is required"))
-  (unless (executable-find (map-elt client :command))
+  (unless (executable-find (map-elt client :command)
+                           (file-remote-p default-directory))
     (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
   (when (acp--client-started-p client)
     (error "Client already started"))
@@ -118,34 +119,34 @@ the error is logged."
                                       process-environment))
          (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
                                                    (map-elt client :command)
-                                                   (map-elt client :instance-count))))
-         (stderr-proc (make-pipe-process
-                       :name (format "acp-client-stderr(%s)-%s"
-                                     (map-elt client :command)
-                                     (map-elt client :instance-count))
-                       :buffer stderr-buffer
-                       :noquery t
-                       :filter (lambda (_process raw-output)
-                                 (acp--log client "STDERR" "%s" (string-trim raw-output))
-                                 (when-let ((std-error (cond
-                                                        ((acp--parse-stderr-api-error raw-output)
-                                                         (acp--parse-stderr-api-error raw-output))
-                                                        ((not (string-empty-p (string-trim raw-output)))
-                                                         ;; Fallback: create a generic error response
-                                                         `((code . -32603)
-                                                           (message . ,raw-output))))))
-                                   (acp--log client "API-ERROR" "%s" (string-trim raw-output))
-                                   (dolist (handler (map-elt client :error-handlers))
-                                     (funcall handler std-error)))))))
+                                                   (map-elt client :instance-count)))))
+    (with-current-buffer stderr-buffer
+      (add-hook 'after-change-functions
+                (lambda (beg end _len)
+                  (let ((raw-output (buffer-substring-no-properties beg end)))
+                    (acp--log client "STDERR" "%s" (string-trim raw-output))
+                    (when-let ((std-error (cond
+                                           ((acp--parse-stderr-api-error raw-output)
+                                            (acp--parse-stderr-api-error raw-output))
+                                           ((not (string-empty-p (string-trim raw-output)))
+                                            ;; Fallback: create a generic error response
+                                            `((code . -32603)
+                                              (message . ,raw-output))))))
+                      (acp--log client "API-ERROR" "%s" (string-trim raw-output))
+                      (dolist (handler (map-elt client :error-handlers))
+                        (funcall handler std-error)))))
+                nil t))
     (let ((process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
                                   (map-elt client :instance-count))
                     :command (cons (map-elt client :command)
                                    (map-elt client :command-params))
-                    :stderr stderr-proc
+                    :stderr stderr-buffer
                     :connection-type 'pipe
                     :noquery t
+                    ;; Start the process with TRAMP if `default-directory' is remote
+                    :file-handler (file-remote-p default-directory)
                     :filter (lambda (_proc input)
                               (acp--log client "INCOMING TEXT" "%s" input)
                               (setq pending-input (concat pending-input input))
@@ -200,8 +201,6 @@ the error is logged."
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
                     :sentinel (lambda (_process _event)
-                                (when (process-live-p stderr-proc)
-                                  (delete-process stderr-proc))
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))))))
       (map-put! client :process process))))
