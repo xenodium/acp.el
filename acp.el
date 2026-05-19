@@ -4,10 +4,10 @@
 
 ;; Author: Alvaro Ramirez https://xenodium.com
 ;; URL: https://github.com/xenodium/acp.el
-;; Version: 0.11.3
+;; Version: 0.12.1
 ;; Package-Requires: ((emacs "28.1"))
 
-(defconst acp-package-version "0.11.3")
+(defconst acp-package-version "0.12.1")
 
 ;; This package is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
