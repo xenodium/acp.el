@@ -44,7 +44,16 @@
 
 (defconst acp--jsonrpc-version "2.0")
 
-(defvar acp-logging-enabled nil)
+(defgroup acp nil
+  "ACP (Agent Client Protocol) implementation."
+  :group 'tools
+  :prefix "acp-")
+
+(defcustom acp-logging-enabled nil
+  "Whether to log ACP traffic and messages to the logs buffer.
+See `acp-logs-buffer' to view the resulting log."
+  :type 'boolean
+  :group 'acp)
 
 (defvar acp-instance-count 0)
 
