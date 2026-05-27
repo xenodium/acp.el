@@ -130,8 +130,7 @@ the error is logged."
                                             (acp--parse-stderr-api-error raw-output))
                                            ((not (string-empty-p (string-trim raw-output)))
                                             ;; Fallback: create a generic error response
-                                            `((code . -32603)
-                                              (message . ,raw-output))))))
+                                            (acp--make-internal-error raw-output)))))
                       (acp--log client "API-ERROR" "%s" (string-trim raw-output))
                       (dolist (handler (map-elt client :error-handlers))
                         (funcall handler std-error)))))
@@ -204,6 +203,13 @@ the error is logged."
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))))))
       (map-put! client :process process))))
+
+(defun acp--make-internal-error (message)
+  "Build a synthetic JSON-RPC-shaped error alist with MESSAGE.
+
+Used for errors synthesized locally rather than received from the
+agent over the wire.  Code -32603 is JSON-RPC's \"Internal error\"."
+  (acp-make-error :code -32603 :message message))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.
