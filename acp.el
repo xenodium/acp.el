@@ -199,9 +199,11 @@ the error is logged."
                                                        (setq message-queue-busy nil))))))
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
-                    :sentinel (lambda (_process _event)
+                    :sentinel (lambda (process event)
                                 (when (buffer-live-p stderr-buffer)
-                                  (kill-buffer stderr-buffer))))))
+                                  (kill-buffer stderr-buffer))
+                                (when (memq (process-status process) '(exit signal))
+                                  (acp--fail-pending-requests :client client :event event))))))
       (map-put! client :process process))))
 
 (defun acp--make-internal-error (message)
@@ -221,6 +223,37 @@ agent over the wire.  Code -32603 is JSON-RPC's \"Internal error\"."
         (if (>= (cdr (func-arity callback)) 2)
             (funcall callback error-data message)
           (funcall callback error-data))))))
+
+(cl-defun acp--fail-pending-requests (&key client event)
+  "Invoke `:on-failure' for any pending requests on CLIENT.
+
+EVENT is the sentinel event string describing why the process ended.
+Each pending callback receives a synthetic JSON-RPC error matching the
+shape used by `acp--route-incoming-message' for response failures."
+  (let* ((pending (map-elt client :pending-requests))
+         (trimmed (string-trim event))
+         (error-message "Agent process ended before completing request")
+         (error-data (acp--make-internal-error
+                      (if (string-empty-p trimmed)
+                          error-message
+                        (format "%s: %s" error-message trimmed)))))
+    (map-put! client :pending-requests nil)
+    (dolist (entry pending)
+      (when-let ((incoming-response (cdr entry))
+                 ((map-elt incoming-response :on-failure)))
+        (condition-case-unless-debug err
+            (acp--call-request-failure
+             :client client
+             :incoming-response incoming-response
+             :error-data error-data
+             :message (acp--make-message
+                       :object `((jsonrpc . ,acp--jsonrpc-version)
+                                 (id . ,(car entry))
+                                 (error . ,error-data))
+                       :json nil))
+          (error
+           (acp--log client "REQUEST FAILURE CALLBACK ERROR"
+                     "Failed with error: %S" err)))))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.

@@ -63,6 +63,21 @@
     (should (equal result log3))
     (should (<= (string-bytes result) max-bytes))))
 
+(ert-deftest acp-test-sync-request-fails-when-agent-exits-after-read ()
+  "Synchronous requests error instead of waiting forever after agent exit."
+  (let ((client (acp-make-client
+                 :command "sh"
+                 :command-params '("-c" "IFS= read -r _; exit 42"))))
+    (unwind-protect
+        (should-error
+         (acp-send-request
+          :client client
+          :request '((:method . "initialize"))
+          :sync t))
+      (when-let ((process (map-elt client :process))
+                 ((process-live-p process)))
+        (delete-process process)))))
+
 (provide 'acp-test)
 
 ;;; acp-test.el ends here
