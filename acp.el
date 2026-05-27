@@ -211,6 +211,17 @@ Used for errors synthesized locally rather than received from the
 agent over the wire.  Code -32603 is JSON-RPC's \"Internal error\"."
   (acp-make-error :code -32603 :message message))
 
+(cl-defun acp--call-request-failure (&key client incoming-response error-data message)
+  "Invoke INCOMING-RESPONSE's failure callback with ERROR-DATA and MESSAGE."
+  (with-temp-buffer ;; Fallback to a temp buffer
+    (with-current-buffer (or (map-elt incoming-response :buffer)
+                             (map-elt client :context-buffer)
+                             (current-buffer))
+      (let ((callback (map-elt incoming-response :on-failure)))
+        (if (>= (cdr (func-arity callback)) 2)
+            (funcall callback error-data message)
+          (funcall callback error-data))))))
+
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.
 
@@ -815,14 +826,11 @@ ON-REQUEST is of the form (lambda (request))."
        (acp--log-traffic client 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt incoming-response :on-failure)
-           (with-temp-buffer ;; Fallback to a temp buffer
-             (with-current-buffer (or (map-elt incoming-response :buffer)
-                                      (map-elt client :context-buffer)
-                                      (current-buffer))
-               (let ((callback (map-elt incoming-response :on-failure)))
-                 (if (>= (cdr (func-arity callback)) 2)
-                     (funcall callback .error message)
-                   (funcall callback .error)))))
+           (acp--call-request-failure
+            :client client
+            :incoming-response incoming-response
+            :error-data .error
+            :message message)
          (acp--log client nil "Unhandled error:\n\n%s" message))
        t)
 
