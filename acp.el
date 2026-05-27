@@ -130,8 +130,7 @@ the error is logged."
                                             (acp--parse-stderr-api-error raw-output))
                                            ((not (string-empty-p (string-trim raw-output)))
                                             ;; Fallback: create a generic error response
-                                            `((code . -32603)
-                                              (message . ,raw-output))))))
+                                            (acp--make-internal-error raw-output)))))
                       (acp--log client "API-ERROR" "%s" (string-trim raw-output))
                       (dolist (handler (map-elt client :error-handlers))
                         (funcall handler std-error)))))
@@ -200,10 +199,61 @@ the error is logged."
                                                        (setq message-queue-busy nil))))))
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
-                    :sentinel (lambda (_process _event)
+                    :sentinel (lambda (process event)
                                 (when (buffer-live-p stderr-buffer)
-                                  (kill-buffer stderr-buffer))))))
+                                  (kill-buffer stderr-buffer))
+                                (when (memq (process-status process) '(exit signal))
+                                  (acp--fail-pending-requests :client client :event event))))))
       (map-put! client :process process))))
+
+(defun acp--make-internal-error (message)
+  "Build a synthetic JSON-RPC-shaped error alist with MESSAGE.
+
+Used for errors synthesized locally rather than received from the
+agent over the wire.  Code -32603 is JSON-RPC's \"Internal error\"."
+  (acp-make-error :code -32603 :message message))
+
+(cl-defun acp--call-request-failure (&key client incoming-response error-data message)
+  "Invoke INCOMING-RESPONSE's failure callback with ERROR-DATA and MESSAGE."
+  (with-temp-buffer ;; Fallback to a temp buffer
+    (with-current-buffer (or (map-elt incoming-response :buffer)
+                             (map-elt client :context-buffer)
+                             (current-buffer))
+      (let ((callback (map-elt incoming-response :on-failure)))
+        (if (>= (cdr (func-arity callback)) 2)
+            (funcall callback error-data message)
+          (funcall callback error-data))))))
+
+(cl-defun acp--fail-pending-requests (&key client event)
+  "Invoke `:on-failure' for any pending requests on CLIENT.
+
+EVENT is the sentinel event string describing why the process ended.
+Each pending callback receives a synthetic JSON-RPC error matching the
+shape used by `acp--route-incoming-message' for response failures."
+  (let* ((pending (map-elt client :pending-requests))
+         (trimmed (string-trim event))
+         (error-message "Agent process ended before completing request")
+         (error-data (acp--make-internal-error
+                      (if (string-empty-p trimmed)
+                          error-message
+                        (format "%s: %s" error-message trimmed)))))
+    (map-put! client :pending-requests nil)
+    (dolist (entry pending)
+      (when-let ((incoming-response (cdr entry))
+                 ((map-elt incoming-response :on-failure)))
+        (condition-case-unless-debug err
+            (acp--call-request-failure
+             :client client
+             :incoming-response incoming-response
+             :error-data error-data
+             :message (acp--make-message
+                       :object `((jsonrpc . ,acp--jsonrpc-version)
+                                 (id . ,(car entry))
+                                 (error . ,error-data))
+                       :json nil))
+          (error
+           (acp--log client "REQUEST FAILURE CALLBACK ERROR"
+                     "Failed with error: %S" err)))))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.
@@ -809,14 +859,11 @@ ON-REQUEST is of the form (lambda (request))."
        (acp--log-traffic client 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt incoming-response :on-failure)
-           (with-temp-buffer ;; Fallback to a temp buffer
-             (with-current-buffer (or (map-elt incoming-response :buffer)
-                                      (map-elt client :context-buffer)
-                                      (current-buffer))
-               (let ((callback (map-elt incoming-response :on-failure)))
-                 (if (>= (cdr (func-arity callback)) 2)
-                     (funcall callback .error message)
-                   (funcall callback .error)))))
+           (acp--call-request-failure
+            :client client
+            :incoming-response incoming-response
+            :error-data .error
+            :message message)
          (acp--log client nil "Unhandled error:\n\n%s" message))
        t)
 
