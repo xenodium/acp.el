@@ -98,7 +98,7 @@
 (defun acp-traffic-display-entry ()
   "Display expanded entry at point."
   (interactive)
-  (if-let ((objects (list (get-text-property (point) 'acp-traffic-object))))
+  (if-let* ((objects (list (get-text-property (point) 'acp-traffic-object))))
       (acp-traffic-display-objects objects)
     (error "Nothing to view")))
 
@@ -111,7 +111,7 @@
     (goto-char (point-min))
     (let ((objects '()))
       (while (not (eobp))
-        (when-let ((object (get-text-property (point) 'acp-traffic-object)))
+        (when-let* ((object (get-text-property (point) 'acp-traffic-object)))
           (push object objects))
         (forward-line 1))
       (acp-traffic-display-objects (nreverse objects)))))
@@ -172,7 +172,7 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
                                                         'success
                                                       'error))
                                   kind
-                                  (propertize method-info 'face font-lock-function-name-face)))
+                                  (propertize method-info 'face 'font-lock-function-name-face)))
                (traffic-entry `((:direction . ,direction)
                                 (:kind . ,kind)
                                 (:object . ,object))))
@@ -224,7 +224,7 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
   "Move to next traffic entry in the traffic buffer."
   (interactive)
   (when acp-traffic-entry--traffic-buffer
-    (if-let ((window (get-buffer-window acp-traffic-entry--traffic-buffer)))
+    (if-let* ((window (get-buffer-window acp-traffic-entry--traffic-buffer)))
         (with-selected-window window
           (acp-traffic-next-entry)
           (acp-traffic--update-line-highlight))
@@ -235,7 +235,7 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
   "Move to previous traffic entry in the traffic buffer."
   (interactive)
   (when acp-traffic-entry--traffic-buffer
-    (if-let ((window (get-buffer-window acp-traffic-entry--traffic-buffer)))
+    (if-let* ((window (get-buffer-window acp-traffic-entry--traffic-buffer)))
         (with-selected-window window
           (acp-traffic-previous-entry)
           (acp-traffic--update-line-highlight))

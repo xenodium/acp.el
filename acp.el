@@ -134,12 +134,12 @@ the error is logged."
                 (lambda (beg end _len)
                   (let ((raw-output (buffer-substring-no-properties beg end)))
                     (acp--log client "STDERR" "%s" (string-trim raw-output))
-                    (when-let ((std-error (cond
-                                           ((acp--parse-stderr-api-error raw-output)
-                                            (acp--parse-stderr-api-error raw-output))
-                                           ((not (string-empty-p (string-trim raw-output)))
-                                            ;; Fallback: create a generic error response
-                                            (acp--make-internal-error raw-output)))))
+                    (when-let* ((std-error (cond
+                                            ((acp--parse-stderr-api-error raw-output)
+                                             (acp--parse-stderr-api-error raw-output))
+                                            ((not (string-empty-p (string-trim raw-output)))
+                                             ;; Fallback: create a generic error response
+                                             (acp--make-internal-error raw-output)))))
                       (acp--log client "API-ERROR" "%s" (string-trim raw-output))
                       (dolist (handler (map-elt client :error-handlers))
                         (funcall handler std-error)))))
@@ -248,8 +248,8 @@ shape used by `acp--route-incoming-message' for response failures."
                         (format "%s: %s" error-message trimmed)))))
     (map-put! client :pending-requests nil)
     (dolist (entry pending)
-      (when-let ((incoming-response (cdr entry))
-                 ((map-elt incoming-response :on-failure)))
+      (when-let* ((incoming-response (cdr entry))
+                  ((map-elt incoming-response :on-failure)))
         (condition-case-unless-debug err
             (acp--call-request-failure
              :client client
@@ -398,8 +398,8 @@ SYNC: When non-nil, send request synchronously."
     (error ":request is required"))
   (unless (acp--client-started-p client)
     (acp--start-client :client client))
-  (when-let ((decorator (map-elt client :outgoing-request-decorator)))
-    (if-let ((decorated (funcall decorator request)))
+  (when-let* ((decorator (map-elt client :outgoing-request-decorator)))
+    (if-let* ((decorated (funcall decorator request)))
         (setq request decorated)
       (acp--log client "DECORATOR ERROR"
                 "Outgoing request decorator returned nil for \"%s\", sending original request"
@@ -841,12 +841,12 @@ ON-REQUEST is of the form (lambda (request))."
   (let-alist (map-elt message :object)
     (or
      ;; Method request result (success)
-     (when-let ((incoming-response (and .id
-                                        ;; Must check against key and not value because
-                                        ;; nil result is valid also.
-                                        (map-contains-key (map-elt message :object) 'result)
-                                        (funcall (map-elt client :request-resolver)
-                                                 :client client :id .id))))
+     (when-let* ((incoming-response (and .id
+                                         ;; Must check against key and not value because
+                                         ;; nil result is valid also.
+                                         (map-contains-key (map-elt message :object) 'result)
+                                         (funcall (map-elt client :request-resolver)
+                                                  :client client :id .id))))
        (acp--log client nil "↳ Routing as response (result)")
        (acp--log-traffic client 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
@@ -861,9 +861,9 @@ ON-REQUEST is of the form (lambda (request))."
        t)
 
      ;; Method request result (failure)
-     (when-let ((incoming-response (and .error .id
-                                        (funcall (map-elt client :request-resolver)
-                                                 :client client :id .id))))
+     (when-let* ((incoming-response (and .error .id
+                                         (funcall (map-elt client :request-resolver)
+                                                  :client client :id .id))))
        (acp--log client nil "↳ Routing as response (error)")
        (acp--log-traffic client 'incoming 'response message)
        (map-put! client :pending-requests (map-delete (map-elt client :pending-requests) .id))
