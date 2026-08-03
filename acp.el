@@ -342,6 +342,10 @@ Note: These are agent process errors.
            (buffer-live-p (acp-logs-buffer :client client))
            (buffer-live-p (acp-traffic-buffer :client client)))
       (progn
+        (map-put! client :error-handlers nil)
+        (map-put! client :notification-handlers nil)
+        (map-put! client :request-handlers nil)
+        (map-put! client :pending-requests nil)
         (when (process-live-p (map-elt client :process))
           (delete-process (map-elt client :process)))
         (kill-buffer (acp-logs-buffer :client client))
