@@ -22,6 +22,31 @@
 ;;
 ;; acp-fakes enable faking ACP infrastructure to allow integration
 ;; in isolation.
+;;
+;; A fake client replays a recorded traffic file the way the real client
+;; consumes a live connection: one ordered stream, each message delivered
+;; exactly once.
+;;
+;; The replay keeps a cursor over the recording and pumps it forward.
+;; Incoming messages (responses, agent-initiated requests, notifications)
+;; are routed as the cursor reaches them, through the same
+;; `acp--route-incoming-message' the real process filter uses -- so a
+;; response resolves its pending request and a notification lands in
+;; whatever turn is active at that point in the stream.
+;;
+;; An outgoing message the client has not sent yet stops the pump: it is a
+;; barrier standing for "the recording did something here that the driver
+;; must do too".  Sending the matching request or response claims the
+;; barrier and the pump resumes.  A driver that will never send it (say a
+;; `session/list' the code under test does not issue) skips it with
+;; `acp-fakes-skip-barrier'; the reply left behind is then unclaimed and
+;; routes to nothing.
+;;
+;; Ordering falls out of the cursor rather than out of scanning the
+;; recording for traffic "related" to a request.  Related-traffic windows
+;; nest and overlap (a long-running request can span a whole pushed turn),
+;; which made the same message reachable from several paths and left its
+;; turn ambiguous.
 
 ;;; Code:
 
@@ -29,11 +54,12 @@
 (eval-when-compile
   (require 'cl-lib))
 (require 'map)
+(require 'seq)
 
 (defun acp-fakes-make-client (messages)
-  "Create a fake ACP client that responds using traffic MESSAGES.
+  "Create a fake ACP client that replays traffic MESSAGES.
 
-Eeach message is of the form:
+Each message is of the form:
 
 \((:direction . ...)
   (:kind . ...)
@@ -42,96 +68,192 @@ Eeach message is of the form:
                  :command "cat"
                  :command-params nil
                  :environment-variables nil
-                 :request-sender (cl-function (lambda (&key client request _buffer on-success on-failure _sync)
+                 :request-sender (cl-function (lambda (&key client request buffer on-success on-failure _sync)
                                                 (acp-fakes--request-sender
                                                  :client client
                                                  :request request
+                                                 :buffer buffer
                                                  :on-success on-success
                                                  :on-failure on-failure)))
                  :response-sender
-                 (cl-function (lambda (&key _client response)
-                                (acp-fakes--response-sender :response response)))
-                 :request-resolver
-                 (cl-function (lambda (&key client id)
-                                (acp-fakes--request-resolver :client client :id id))))))
+                 (cl-function (lambda (&key client response)
+                                (acp-fakes--response-sender :client client :response response)))
+                 :notification-sender
+                 (cl-function (lambda (&key client notification &allow-other-keys)
+                                (acp-fakes--notification-sender
+                                 :client client :notification notification))))))
+    ;; `:request-resolver' is left at acp's own, so replayed responses
+    ;; resolve through the same path a live connection uses.  That needs
+    ;; pending requests kept in acp's shape, keyed by recorded id.
     (setf (map-elt client :message-queue) (copy-sequence messages))
     (setf (map-elt client :pending-requests) '())
+    (setf (map-elt client :traffic) (vconcat messages))
+    (setf (map-elt client :cursor) 0)
+    (setf (map-elt client :claimed) (make-hash-table :test 'eql))
+    (setf (map-elt client :pumping) nil)
     client))
 
-(cl-defun acp-fakes--request-sender (&key client _request on-success on-failure)
-  "Send request using CLIENT, ON-SUCCESS, and ON-FAILURE."
+(defun acp-fakes--traffic (client)
+  "Return CLIENT's recorded traffic vector."
+  (map-elt client :traffic))
+
+(defun acp-fakes--claimed-p (client index)
+  "Return non-nil when CLIENT's recorded message at INDEX was claimed."
+  (gethash index (map-elt client :claimed)))
+
+(defun acp-fakes--claim (client index)
+  "Mark CLIENT's recorded message at INDEX as claimed."
+  (puthash index t (map-elt client :claimed)))
+
+(defun acp-fakes--claim-outgoing (client predicate)
+  "Claim CLIENT's first unclaimed outgoing message satisfying PREDICATE.
+
+Returns the claimed message, or nil when the recording holds no
+counterpart -- a request the code under test makes but the capture never
+did, which simply goes unanswered."
+  (let ((traffic (acp-fakes--traffic client))
+        (found nil))
+    (dotimes (index (length traffic))
+      (unless found
+        (let ((message (aref traffic index)))
+          (when (and (eq (map-elt message :direction) 'outgoing)
+                     (not (acp-fakes--claimed-p client index))
+                     (funcall predicate message))
+            (acp-fakes--claim client index)
+            (setq found message)))))
+    found))
+
+(defun acp-fakes--route (client message)
+  "Route incoming MESSAGE to CLIENT as the live process filter would."
+  (acp--route-incoming-message
+   :message message
+   :client client
+   :on-notification
+   (lambda (notification)
+     (dolist (handler (map-elt client :notification-handlers))
+       (funcall handler notification)))
+   :on-request
+   (lambda (request)
+     (dolist (handler (map-elt client :request-handlers))
+       (funcall handler request)))))
+
+(defun acp-fakes-pump (client)
+  "Deliver CLIENT's recorded incoming traffic up to the next barrier.
+
+Advances the cursor, routing each incoming message as it is reached, and
+stops on an outgoing message the client has not sent yet (see
+`acp-fakes-barrier').  Returns the number of messages delivered.
+
+Routing a message can make the code under test send a request or response,
+which pumps again; that re-entrant call returns immediately and the
+outermost pump carries on from the cursor it left."
+  (if (map-elt client :pumping)
+      0
+    (setf (map-elt client :pumping) t)
+    (unwind-protect
+        (let ((traffic (acp-fakes--traffic client))
+              (delivered 0)
+              (blocked nil))
+          (while (and (not blocked)
+                      (< (map-elt client :cursor) (length traffic)))
+            (let* ((index (map-elt client :cursor))
+                   (message (aref traffic index)))
+              (cond
+               ((eq (map-elt message :direction) 'outgoing)
+                (if (acp-fakes--claimed-p client index)
+                    (setf (map-elt client :cursor) (1+ index))
+                  (setq blocked t)))
+               (t
+                (setf (map-elt client :cursor) (1+ index))
+                (setq delivered (1+ delivered))
+                (acp-fakes--route client message)))))
+          delivered)
+      (setf (map-elt client :pumping) nil))))
+
+(defun acp-fakes-barrier (client)
+  "Return the recorded outgoing message stalling CLIENT's replay, or nil.
+
+The barrier is traffic the capture sent from the client side that the code
+under test has not reproduced.  Sending it resumes the replay; a driver
+that will never send it uses `acp-fakes-skip-barrier'."
+  (let ((traffic (acp-fakes--traffic client))
+        (index (map-elt client :cursor)))
+    (when (< index (length traffic))
+      (let ((message (aref traffic index)))
+        (when (and (eq (map-elt message :direction) 'outgoing)
+                   (not (acp-fakes--claimed-p client index)))
+          message)))))
+
+(defun acp-fakes-skip-barrier (client)
+  "Skip CLIENT's current barrier and resume the replay.
+
+For recorded client traffic the code under test never sends.  Any reply
+the recording holds for it is left unclaimed and routes to nothing."
+  (when (acp-fakes-barrier client)
+    (acp-fakes--claim client (map-elt client :cursor))
+    (acp-fakes-pump client)
+    t))
+
+(defun acp-fakes-exhausted-p (client)
+  "Return non-nil when CLIENT has replayed all recorded traffic."
+  (>= (map-elt client :cursor) (length (acp-fakes--traffic client))))
+
+(cl-defun acp-fakes--request-sender (&key client request buffer on-success on-failure)
+  "Claim the recorded counterpart of REQUEST and resume CLIENT's replay.
+
+REQUEST is matched to the first unclaimed recorded outgoing request of the
+same method, so a driver whose request sequence differs from the capture
+by an unrelated request still pairs each turn with its own reply.
+
+Callbacks are registered under the recorded id in acp's own pending-request
+shape, so the reply resolves through `acp--route-incoming-message' when the
+pump reaches it -- keeping the request in flight, and its notifications in
+turn, until then."
   (unless client
     (error ":client is required"))
+  (let* ((method (map-elt request :method))
+         (recorded (acp-fakes--claim-outgoing
+                    client
+                    (lambda (message)
+                      (and (eq (map-elt message :kind) 'request)
+                           (equal (map-nested-elt message '(:object method)) method)))))
+         (request-id (map-nested-elt recorded '(:object id))))
+    (when request-id
+      (map-put! client :pending-requests
+                (cons (cons request-id `((:request . ,request)
+                                         (:buffer . ,buffer)
+                                         (:on-success . ,on-success)
+                                         (:on-failure . ,on-failure)))
+                      (map-elt client :pending-requests))))
+    (acp-fakes-pump client)))
+
+(cl-defun acp-fakes--response-sender (&key client response)
+  "Claim the recorded counterpart of RESPONSE and resume CLIENT's replay.
+
+RESPONSE answers an agent-initiated request (a `session/push', a permission
+prompt), so it is matched by the id it replies to."
   (unless client
     (error ":client is required"))
-  (let* ((request-id (1+ (map-elt client :request-id)))
-         (message-queue (map-elt client :message-queue))
-         (pending-requests (map-elt client :pending-requests)))
-    (setf (map-elt client :request-id) request-id)
-    (setf (map-elt pending-requests request-id) (list on-success on-failure))
-    (setf (map-elt client :pending-requests) pending-requests)
-    ;; Trigger all related notifications or incoming requests
-    ;; potentially generated by the agent, related to the
-    ;; client request.
-    (when-let* ((related-incoming-traffic (acp-fakes--get-related-incoming-traffic
-                                           :messages message-queue
-                                           :request-id request-id)))
-      (cl-flet ((acp--log (&rest _) (ignore))
-                (acp--log-traffic (&rest _) (ignore)))
-        (dolist (msg related-incoming-traffic)
-          (acp--route-incoming-message
-           :message msg
-           :client client
-           :on-notification
-           (lambda (notification)
-             (dolist (handler (map-elt client :notification-handlers))
-               (funcall handler notification)))
-           :on-request
-           (lambda (request)
-             (dolist (handler (map-elt client :request-handlers))
-               (funcall handler request)))))))
-    (let ((response-message (seq-find
-                             (lambda (msg)
-                               (and (eq (map-elt msg :direction) 'incoming)
-                                    (equal (map-elt (map-elt msg :object) 'id)
-                                           request-id)
-                                    ;; Must be a response (has result or error key),
-                                    ;; not an incoming request (has method key).
-                                    (or (map-contains-key (map-elt msg :object) 'result)
-                                        (map-contains-key (map-elt msg :object) 'error))))
-                             message-queue)))
-      (when response-message
-        (setf (map-elt client :message-queue)
-              (seq-remove (lambda (msg)
-                            (eq msg response-message))
-                          message-queue))
-        (let* ((response-obj (map-elt response-message :object))
-               (callbacks (map-elt pending-requests request-id))
-               (on-success (nth 0 callbacks))
-               (on-failure (nth 1 callbacks))
-               (result (map-elt response-obj 'result))
-               (error (map-elt response-obj 'error)))
-          (setf (map-elt client :pending-requests)
-                (map-delete pending-requests request-id))
-          (cond
-           ((and on-success (map-contains-key response-obj 'result))
-            (funcall on-success result)
-            result)
-           ((and error on-failure)
-            (funcall on-failure error)
-            error)
-           (t
-            (error "No matching response found for request %s" request-id))))))))
+  (let ((request-id (map-elt response :request-id)))
+    (acp-fakes--claim-outgoing
+     client
+     (lambda (message)
+       (and (eq (map-elt message :kind) 'response)
+            (or (null request-id)
+                (equal (map-nested-elt message '(:object id)) request-id)))))
+    (acp-fakes-pump client)))
 
-(cl-defun acp-fakes--response-sender (&key _response)
-  "Fake response sender."
-  ;; Nothing left to do after sending.
-  (ignore))
-
-(cl-defun acp-fakes--request-resolver (&key _client _id)
-  "Fake request resolver."
-  ;; Pending requests tracked in fake message-queue.
-  (ignore))
+(cl-defun acp-fakes--notification-sender (&key client notification)
+  "Claim the recorded counterpart of NOTIFICATION and resume CLIENT's replay."
+  (unless client
+    (error ":client is required"))
+  (let ((method (map-elt notification :method)))
+    (acp-fakes--claim-outgoing
+     client
+     (lambda (message)
+       (and (eq (map-elt message :kind) 'notification)
+            (equal (map-nested-elt message '(:object method)) method)))))
+  (acp-fakes-pump client))
 
 (defun acp-fakes--test-fake-client ()
   "Test a fake client."
@@ -217,36 +339,6 @@ For incoming messages without an id, log them."
                    (equal (map-nested-elt item '(:object method))
                           "authenticate")))
             messages))
-
-(cl-defun acp-fakes--get-related-incoming-traffic (&key messages request-id)
-  "Extract all the incoming MESSAGES related to incoming request with REQUEST-ID."
-  (unless messages
-    (error ":messages is required"))
-  (unless request-id
-    (error ":request-id is required"))
-  (let ((collecting nil)
-        (result '()))
-    (dolist (item messages (nreverse result))
-      (let ((direction (alist-get :direction item))
-            (kind (alist-get :kind item))
-            (id (alist-get 'id (alist-get :object item))))
-        (cond
-         ;; Start collecting for request with request-id.
-         ((and (eq direction 'outgoing)
-               (eq kind 'request)
-               (equal id request-id))
-          (setq collecting t))
-         ;; Stop collecting for request with request-id.
-         ((and collecting
-               (eq direction 'incoming)
-               (eq kind 'response)
-               (equal id request-id))
-          (setq collecting nil))
-         ;; Collect incoming requests/notifications while in collecting mode
-         ((and collecting
-               (eq direction 'incoming)
-               (memq kind '(request notification)))
-          (push item result)))))))
 
 (provide 'acp-fakes)
 
