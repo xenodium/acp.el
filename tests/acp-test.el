@@ -78,6 +78,94 @@
                  ((process-live-p process)))
         (delete-process process)))))
 
+(defun acp-test--exited-client ()
+  "Return a started client whose process has since exited."
+  (let* ((client (acp-make-client :command "cat"))
+         (process (progn (acp--start-client :client client)
+                         (map-elt client :process))))
+    (delete-process process)
+    (while (process-live-p process)
+      (accept-process-output nil 0.05))
+    client))
+
+(ert-deftest acp-test-shutdown-releases-client-whose-process-exited ()
+  "Release handlers and buffers even when the process already exited."
+  (let ((client (acp-test--exited-client)))
+    (acp-subscribe-to-notifications
+     :client client :on-notification (lambda (_notification) nil))
+    (should (map-elt client :notification-handlers))
+    (let ((logs (acp-logs-buffer :client client))
+          (traffic (acp-traffic-buffer :client client)))
+      (acp-shutdown :client client)
+      (should-not (map-elt client :notification-handlers))
+      (should-not (buffer-live-p logs))
+      (should-not (buffer-live-p traffic)))))
+
+(ert-deftest acp-test-shutdown-releases-running-client ()
+  "Release handlers and buffers for a client with a live process."
+  (let ((client (acp-make-client :command "cat")))
+    (acp--start-client :client client)
+    (acp-subscribe-to-notifications
+     :client client :on-notification (lambda (_notification) nil))
+    (let ((logs (acp-logs-buffer :client client))
+          (traffic (acp-traffic-buffer :client client)))
+      (acp-shutdown :client client)
+      (should-not (map-elt client :notification-handlers))
+      (should-not (buffer-live-p logs))
+      (should-not (buffer-live-p traffic)))))
+
+(ert-deftest acp-test-shutdown-is-idempotent ()
+  "Leave no buffers behind when shutdown is called more than once."
+  (let ((client (acp-make-client :command "cat")))
+    (acp--start-client :client client)
+    (acp-logs-buffer :client client)
+    (acp-traffic-buffer :client client)
+    (acp-shutdown :client client)
+    (acp-shutdown :client client)
+    (should-not (get-buffer (acp--logs-buffer-name client)))
+    (should-not (get-buffer (acp--traffic-buffer-name client)))))
+
+(ert-deftest acp-test-shutdown-does-not-create-buffers ()
+  "Do not resurrect buffers that were never opened."
+  (let ((client (acp-make-client :command "cat")))
+    (acp--start-client :client client)
+    (should-not (get-buffer (acp--logs-buffer-name client)))
+    (acp-shutdown :client client)
+    (should-not (get-buffer (acp--logs-buffer-name client)))
+    (should-not (get-buffer (acp--traffic-buffer-name client)))))
+
+(ert-deftest acp-test-shutdown-tolerates-externally-killed-buffer ()
+  "Release the traffic buffer when the log buffer is already gone."
+  (let ((client (acp-make-client :command "cat")))
+    (acp--start-client :client client)
+    (kill-buffer (acp-logs-buffer :client client))
+    (let ((traffic (acp-traffic-buffer :client client)))
+      (acp-shutdown :client client)
+      (should-not (buffer-live-p traffic)))))
+
+(ert-deftest acp-test-shutdown-releases-never-started-client ()
+  "Release handlers on a client that was never started."
+  (let ((client (acp-make-client :command "cat")))
+    (acp-subscribe-to-notifications
+     :client client :on-notification (lambda (_notification) nil))
+    (acp-shutdown :client client)
+    (should-not (map-elt client :notification-handlers))))
+
+(ert-deftest acp-test-shutdown-after-restart-releases-again ()
+  "Allow a restarted client to be shut down a second time."
+  (let ((client (acp-make-client :command "cat")))
+    (acp--start-client :client client)
+    (acp-shutdown :client client)
+    (acp--start-client :client client)
+    (acp-subscribe-to-notifications
+     :client client :on-notification (lambda (_notification) nil))
+    (let ((logs (acp-logs-buffer :client client))
+          (traffic (acp-traffic-buffer :client client)))
+      (acp-shutdown :client client)
+      (should-not (map-elt client :notification-handlers))
+      (should-not (buffer-live-p logs))
+      (should-not (buffer-live-p traffic)))))
+
 (provide 'acp-test)
 
 ;;; acp-test.el ends here

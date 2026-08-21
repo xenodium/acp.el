@@ -334,23 +334,25 @@ Note: These are agent process errors.
     (map-put! client :error-handlers handlers)))
 
 (cl-defun acp-shutdown (&key client)
-  "Shutdown ACP CLIENT and release resources."
+  "Shutdown ACP CLIENT and release resources.
+
+Each resource is released independently, so a partially torn down client
+\(an exited process, an already killed log buffer, a client that was
+never started) is still fully released.  Safe to call repeatedly."
   (unless client
     (error ":client is required"))
-  (if (and (or (not (map-elt client :process))
-               (process-live-p (map-elt client :process)))
-           (buffer-live-p (acp-logs-buffer :client client))
-           (buffer-live-p (acp-traffic-buffer :client client)))
-      (progn
-        (map-put! client :error-handlers nil)
-        (map-put! client :notification-handlers nil)
-        (map-put! client :request-handlers nil)
-        (map-put! client :pending-requests nil)
-        (when (process-live-p (map-elt client :process))
-          (delete-process (map-elt client :process)))
-        (kill-buffer (acp-logs-buffer :client client))
-        (kill-buffer (acp-traffic-buffer :client client)))
-    (message "Client already shut down")))
+  (map-put! client :error-handlers nil)
+  (map-put! client :notification-handlers nil)
+  (map-put! client :request-handlers nil)
+  (map-put! client :pending-requests nil)
+  (when-let* ((process (map-elt client :process)))
+    (when (process-live-p process)
+      (delete-process process))
+    (map-put! client :process nil))
+  (when-let* ((buffer (get-buffer (acp--logs-buffer-name client))))
+    (kill-buffer buffer))
+  (when-let* ((buffer (get-buffer (acp--traffic-buffer-name client))))
+    (kill-buffer buffer)))
 
 (cl-defun acp-send-request (&key client request buffer on-success on-failure sync)
   "Send REQUEST from CLIENT.
@@ -1012,12 +1014,21 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
   (with-current-buffer (acp-traffic-buffer :client client)
     (erase-buffer)))
 
+(defun acp--logs-buffer-name (client)
+  "Return the name of CLIENT logs buffer, whether or not it exists."
+  (format "*acp-(%s)-%s log*"
+          (map-elt client :command)
+          (map-elt client :instance-count)))
+
+(defun acp--traffic-buffer-name (client)
+  "Return the name of CLIENT traffic buffer, whether or not it exists."
+  (format "*acp-(%s)-%s traffic*"
+          (map-elt client :command)
+          (map-elt client :instance-count)))
+
 (cl-defun acp-logs-buffer (&key client)
-  "Get CLIENT logs buffer."
-  (if-let* ((name
-             (format "*acp-(%s)-%s log*"
-                     (map-elt client :command)
-                     (map-elt client :instance-count)))
+  "Get CLIENT logs buffer, creating it when missing."
+  (if-let* ((name (acp--logs-buffer-name client))
             (buffer (get-buffer name)))
       buffer
     (with-current-buffer (get-buffer-create name)
@@ -1025,10 +1036,8 @@ DIRECTION is either `incoming' or `outgoing', OBJECT is the parsed object."
       (current-buffer))))
 
 (cl-defun acp-traffic-buffer (&key client)
-  "Get CLIENT traffic buffer."
-  (acp-traffic-get-buffer :named (format "*acp-(%s)-%s traffic*"
-                                         (map-elt client :command)
-                                         (map-elt client :instance-count))))
+  "Get CLIENT traffic buffer, creating it when missing."
+  (acp-traffic-get-buffer :named (acp--traffic-buffer-name client)))
 
 (defun acp--increment-instance-count ()
   "Increment variable `acp-instance-count'."
