@@ -63,6 +63,184 @@
     (should (equal result log3))
     (should (<= (string-bytes result) max-bytes))))
 
+(ert-deftest acp-test-initialize-advertises-form-elicitation ()
+  "Serialize form elicitation as an empty object, not JSON null."
+  (let* ((request (acp-make-initialize-request
+                   :protocol-version 1
+                   :elicitation-form-capability t))
+         (form (map-nested-elt
+                request '(:params clientCapabilities elicitation form)))
+         (json (acp--serialize-json request)))
+    (should (hash-table-p form))
+    (should (equal 0 (hash-table-count form)))
+    (should (string-match-p
+             (rx "\"elicitation\":" (* space)
+                 "{" (* space)
+                 "\"form\":" (* space) "{}" (* space)
+                 "}")
+             json))
+    (should-not (string-match-p "\"form\":null" json))))
+
+(ert-deftest acp-test-initialize-omits-form-elicitation-by-default ()
+  "Do not promise support for form elicitation unless requested."
+  (let ((request (acp-make-initialize-request :protocol-version 1)))
+    (should-not
+     (map-contains-key
+      (map-nested-elt request '(:params clientCapabilities))
+      'elicitation))))
+
+(ert-deftest acp-test-make-elicitation-response ()
+  "Construct each valid elicitation response shape."
+  (should
+   (equal (acp-make-elicitation-response
+           :request-id 7
+           :action "accept"
+           :content '((authorized . t)))
+          '((:request-id . 7)
+            (:result . ((action . "accept")
+                        (content . ((authorized . t))))))))
+  (should
+   (equal (acp-make-elicitation-response
+           :request-id "request-8"
+           :action "decline")
+          '((:request-id . "request-8")
+            (:result . ((action . "decline"))))))
+  (should
+   (equal (acp-make-elicitation-response
+           :request-id 9
+           :action "cancel")
+          '((:request-id . 9)
+            (:result . ((action . "cancel"))))))
+  (should-error
+   (acp-make-elicitation-response
+    :request-id 10
+    :action "decline"
+    :content '((answer . "no")))))
+
+(ert-deftest acp-test-request-reports-id-before-transmission ()
+  "Report a request's wire id after registration and before writing it."
+  (let ((client (acp-make-client :command "cat"))
+        events)
+    (unwind-protect
+        (progn
+          (acp--start-client :client client)
+          (cl-letf (((symbol-function 'process-send-string)
+                     (lambda (&rest _)
+                       (push 'written events))))
+            (acp-send-request
+             :client client
+             :request '((:method . "initialize"))
+             :on-sent
+             (lambda (event)
+               (should
+                (map-nested-elt
+                 client
+                 `(:pending-requests
+                   ,(map-elt event :request-id))))
+               (push 'registered events))))
+          (should (equal events '(written registered))))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-request-observer-failure-aborts-send ()
+  "Do not transmit or retain a request rejected by its ON-SENT observer."
+  (let ((client (acp-make-client :command "cat"))
+        written)
+    (unwind-protect
+        (progn
+          (acp--start-client :client client)
+          (cl-letf (((symbol-function 'process-send-string)
+                     (lambda (&rest _)
+                       (setq written t))))
+            (should-error
+             (acp-send-request
+              :client client
+              :request '((:method . "initialize"))
+              :on-sent (lambda (_event)
+                         (error "Reject request")))))
+          (should-not written)
+          (should-not (map-elt client :pending-requests)))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-request-transmission-failure-rolls-back-registration ()
+  "Do not retain a request when its process write fails."
+  (let ((client (acp-make-client :command "cat")))
+    (unwind-protect
+        (progn
+          (acp--start-client :client client)
+          (cl-letf (((symbol-function 'process-send-string)
+                     (lambda (&rest _)
+                       (error "Write failed"))))
+            (should-error
+             (acp-send-request
+              :client client
+              :request '((:method . "initialize")))))
+          (should-not (map-elt client :pending-requests)))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-process-exit-notifies-once ()
+  "Notify process-exit subscribers once for an independently exiting client."
+  (let ((client (acp-make-client :command "cat"))
+        events)
+    (acp-subscribe-to-process-exits
+     :client client
+     :on-exit (lambda (event)
+                (push event events)))
+    (acp--start-client :client client)
+    (delete-process (map-elt client :process))
+    (while (process-live-p (map-elt client :process))
+      (accept-process-output nil 0.05))
+    (accept-process-output nil 0.05)
+    (should (= (length events) 1))
+    (should (stringp (map-elt (seq-first events) :event)))
+    (acp-shutdown :client client)
+    (should (= (length events) 1))))
+
+(ert-deftest acp-test-stale-process-sentinel-does-not-end-replacement ()
+  "Finish an old generation without letting its sentinel end its replacement."
+  (let ((client (acp-make-client :command "cat"))
+        events
+        failed)
+    (unwind-protect
+        (progn
+          (acp-subscribe-to-process-exits
+           :client client
+           :on-exit (lambda (event)
+                      (push event events)))
+          (acp--start-client :client client)
+          (let* ((old-process (map-elt client :process))
+                 (old-sentinel (process-sentinel old-process)))
+            ;; Delay the real sentinel until after a replacement starts.
+            (set-process-sentinel old-process #'ignore)
+            (delete-process old-process)
+            (map-put! client :pending-requests
+                      `((76 . ((:on-failure
+                               . ,(lambda (_error)
+                                    (setq failed t)))))))
+            (acp--start-client :client client)
+            (let ((replacement (map-elt client :process))
+                  (pending '((77 . ((:request . request))))))
+              (should failed)
+              (should (= (length events) 1))
+              (map-put! client :pending-requests pending)
+              (funcall old-sentinel old-process "finished\n")
+              (should (eq replacement (map-elt client :process)))
+              (should (equal pending
+                             (map-elt client :pending-requests)))
+              (should (= (length events) 1)))))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-shutdown-notifies-process-exit-subscribers ()
+  "Notify subscribers before intentional shutdown releases them."
+  (let ((client (acp-make-client :command "cat"))
+        event)
+    (acp--start-client :client client)
+    (acp-subscribe-to-process-exits
+     :client client
+     :on-exit (lambda (value)
+                (setq event value)))
+    (acp-shutdown :client client)
+    (should (equal (map-elt event :event) "shutdown"))))
+
 (ert-deftest acp-test-sync-request-fails-when-agent-exits-after-read ()
   "Synchronous requests error instead of waiting forever after agent exit."
   (let ((client (acp-make-client

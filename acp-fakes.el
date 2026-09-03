@@ -68,13 +68,16 @@ Each message is of the form:
                  :command "cat"
                  :command-params nil
                  :environment-variables nil
-                 :request-sender (cl-function (lambda (&key client request buffer on-success on-failure _sync)
+                 :request-sender (cl-function (lambda (&key client request buffer
+                                                            on-success on-failure
+                                                            on-sent _sync)
                                                 (acp-fakes--request-sender
                                                  :client client
                                                  :request request
                                                  :buffer buffer
                                                  :on-success on-success
-                                                 :on-failure on-failure)))
+                                                 :on-failure on-failure
+                                                 :on-sent on-sent)))
                  :response-sender
                  (cl-function (lambda (&key client response)
                                 (acp-fakes--response-sender :client client :response response)))
@@ -198,7 +201,8 @@ the recording holds for it is left unclaimed and routes to nothing."
   "Return non-nil when CLIENT has replayed all recorded traffic."
   (>= (map-elt client :cursor) (length (acp-fakes--traffic client))))
 
-(cl-defun acp-fakes--request-sender (&key client request buffer on-success on-failure)
+(cl-defun acp-fakes--request-sender (&key client request buffer on-success
+                                          on-failure on-sent)
   "Claim the recorded counterpart of REQUEST and resume CLIENT's replay.
 
 REQUEST is matched to the first unclaimed recorded outgoing request of the
@@ -225,6 +229,15 @@ turn, until then."
                                          (:on-success . ,on-success)
                                          (:on-failure . ,on-failure)))
                       (map-elt client :pending-requests))))
+    (when (and request-id on-sent)
+      (condition-case err
+          (funcall on-sent (list (cons :request-id request-id)))
+        (error
+         (map-put! client :pending-requests
+                   (assoc-delete-all
+                    request-id
+                    (map-elt client :pending-requests)))
+         (signal (car err) (cdr err)))))
     (acp-fakes-pump client)))
 
 (cl-defun acp-fakes--response-sender (&key client response)

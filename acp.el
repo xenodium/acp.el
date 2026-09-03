@@ -97,6 +97,8 @@ the error is logged."
         (cons :notification-handlers ())
         (cons :request-handlers ())
         (cons :error-handlers ())
+        (cons :process-exit-handlers ())
+        (cons :process-exit-notified nil)
         (cons :request-sender (or request-sender #'acp--request-sender))
         (cons :notification-sender (or notification-sender #'acp--notification-sender))
         (cons :request-resolver (or request-resolver #'acp--request-resolver))
@@ -119,6 +121,21 @@ the error is logged."
     (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
   (when (acp--client-started-p client)
     (error "Client already started"))
+  ;; A caller can observe a dead process before Emacs has dispatched its
+  ;; sentinel.  Complete that connection's lifecycle before installing a
+  ;; replacement, so old requests and reverse requests cannot acquire the
+  ;; new connection's lifetime.
+  (when-let* ((process (map-elt client :process)))
+    (acp--finish-process
+     :client client
+     :process process
+     :event (format "process status %s before restart"
+                    (process-status process))))
+  ;; An exit or request-failure callback may have started the replacement
+  ;; while the old lifecycle was being completed.
+  (when (acp--client-started-p client)
+    (cl-return-from acp--start-client))
+  (map-put! client :process-exit-notified nil)
   (let* ((coding-system-for-read 'utf-8-unix)
          (coding-system-for-write 'utf-8-unix)
          (pending-input "")
@@ -126,9 +143,13 @@ the error is logged."
          (message-queue-busy nil)
          (process-environment (append (map-elt client :environment-variables)
                                       process-environment))
-         (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
-                                                   (map-elt client :command)
-                                                   (map-elt client :instance-count)))))
+         ;; Separate process generations must not share a stderr buffer:
+         ;; a delayed old sentinel owns and closes only its own buffer.
+         (stderr-buffer
+          (generate-new-buffer
+           (format "acp-client-stderr(%s)-%s"
+                   (map-elt client :command)
+                   (map-elt client :instance-count)))))
     (with-current-buffer stderr-buffer
       (add-hook 'after-change-functions
                 (lambda (beg end _len)
@@ -208,11 +229,16 @@ the error is logged."
                                                        (setq message-queue-busy nil))))))
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
-                    :sentinel (lambda (process event)
-                                (when (buffer-live-p stderr-buffer)
-                                  (kill-buffer stderr-buffer))
-                                (when (memq (process-status process) '(exit signal))
-                                  (acp--fail-pending-requests :client client :event event))))))
+                    :sentinel
+                    (lambda (process event)
+                      (when (buffer-live-p stderr-buffer)
+                        (kill-buffer stderr-buffer))
+                      (when (memq (process-status process)
+                                  '(exit signal))
+                        (acp--finish-process
+                         :client client
+                         :process process
+                         :event event))))))
       (map-put! client :process process))))
 
 (defun acp--make-internal-error (message)
@@ -240,36 +266,43 @@ agent over the wire.  Code -32603 is JSON-RPC's \"Internal error\"."
            (acp--log client "RESPONSE HANDLER ERROR"
                      "Failed with error: %S" err)))))))
 
-(cl-defun acp--fail-pending-requests (&key client event)
-  "Invoke `:on-failure' for any pending requests on CLIENT.
+(cl-defun acp--finish-process (&key client process event)
+  "Finish PROCESS when it still owns CLIENT's current connection.
 
 EVENT is the sentinel event string describing why the process ended.
 Each pending callback receives a synthetic JSON-RPC error matching the
-shape used by `acp--route-incoming-message' for response failures."
-  (let* ((pending (map-elt client :pending-requests))
-         (trimmed (string-trim event))
-         (error-message "Agent process ended before completing request")
-         (error-data (acp--make-internal-error
-                      (if (string-empty-p trimmed)
-                          error-message
-                        (format "%s: %s" error-message trimmed)))))
-    (map-put! client :pending-requests nil)
-    (dolist (entry pending)
-      (when-let* ((incoming-response (cdr entry))
-                  ((map-elt incoming-response :on-failure)))
-        (condition-case-unless-debug err
-            (acp--call-request-failure
-             :client client
-             :incoming-response incoming-response
-             :error-data error-data
-             :message (acp--make-message
-                       :object `((jsonrpc . ,acp--jsonrpc-version)
-                                 (id . ,(car entry))
-                                 (error . ,error-data))
-                       :json nil))
-          (error
-           (acp--log client "REQUEST FAILURE CALLBACK ERROR"
-                     "Failed with error: %S" err)))))))
+shape used by `acp--route-incoming-message' for response failures.
+
+The pending registry and process owner are cleared before callbacks.
+This makes callback-initiated restart safe: old callbacks cannot consume
+or terminate work registered on the replacement connection."
+  (when (eq process (map-elt client :process))
+    (let* ((pending (map-elt client :pending-requests))
+           (trimmed (string-trim event))
+           (error-message "Agent process ended before completing request")
+           (error-data (acp--make-internal-error
+                        (if (string-empty-p trimmed)
+                            error-message
+                          (format "%s: %s" error-message trimmed)))))
+      (map-put! client :pending-requests nil)
+      (map-put! client :process nil)
+      (acp--notify-process-exit :client client :event event)
+      (dolist (entry pending)
+        (when-let* ((incoming-response (cdr entry))
+                    ((map-elt incoming-response :on-failure)))
+          (condition-case-unless-debug err
+              (acp--call-request-failure
+               :client client
+               :incoming-response incoming-response
+               :error-data error-data
+               :message (acp--make-message
+                         :object `((jsonrpc . ,acp--jsonrpc-version)
+                                   (id . ,(car entry))
+                                   (error . ,error-data))
+                         :json nil))
+            (error
+             (acp--log client "REQUEST FAILURE CALLBACK ERROR"
+                       "Failed with error: %S" err))))))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.
@@ -340,6 +373,42 @@ Note: These are agent process errors.
           handlers)
     (map-put! client :error-handlers handlers)))
 
+(cl-defun acp-subscribe-to-process-exits (&key client on-exit buffer)
+  "Subscribe to termination of CLIENT's current process.
+
+ON-EXIT receives an alist containing `:event', the Emacs process
+sentinel text, and runs with BUFFER current.  Each started process
+notifies subscribers at most once, whether it exits independently or
+through `acp-shutdown'."
+  (unless client
+    (error ":client is required"))
+  (unless on-exit
+    (error ":on-exit is required"))
+  (let ((handlers (map-elt client :process-exit-handlers)))
+    (push (lambda (event)
+            (with-temp-buffer
+              (with-current-buffer (or (when (buffer-live-p buffer)
+                                         buffer)
+                                       (when (buffer-live-p
+                                              (map-elt client
+                                                       :context-buffer))
+                                         (map-elt client :context-buffer))
+                                       (current-buffer))
+                (funcall on-exit event))))
+          handlers)
+    (map-put! client :process-exit-handlers handlers)))
+
+(cl-defun acp--notify-process-exit (&key client event)
+  "Notify CLIENT's process-exit handlers once with EVENT."
+  (unless (map-elt client :process-exit-notified)
+    (map-put! client :process-exit-notified t)
+    (dolist (handler (map-elt client :process-exit-handlers))
+      (condition-case-unless-debug err
+          (funcall handler (list (cons :event event)))
+        (error
+         (acp--log client "PROCESS EXIT HANDLER ERROR"
+                   "Failed with error: %S" err))))))
+
 (cl-defun acp-shutdown (&key client)
   "Shutdown ACP CLIENT and release resources.
 
@@ -348,9 +417,12 @@ Each resource is released independently, so a partially torn down client
 never started) is still fully released.  Safe to call repeatedly."
   (unless client
     (error ":client is required"))
+  (when (map-elt client :process)
+    (acp--notify-process-exit :client client :event "shutdown"))
   (map-put! client :error-handlers nil)
   (map-put! client :notification-handlers nil)
   (map-put! client :request-handlers nil)
+  (map-put! client :process-exit-handlers nil)
   (map-put! client :pending-requests nil)
   (when-let* ((process (map-elt client :process)))
     (when (process-live-p process)
@@ -361,11 +433,14 @@ never started) is still fully released.  Safe to call repeatedly."
   (when-let* ((buffer (get-buffer (acp--traffic-buffer-name client))))
     (kill-buffer buffer)))
 
-(cl-defun acp-send-request (&key client request buffer on-success on-failure sync)
+(cl-defun acp-send-request (&key client request buffer on-success on-failure
+                                 on-sent sync)
   "Send REQUEST from CLIENT.
 
 ON-SUCCESS is of the form (lambda (response)).
 ON-FAILURE is of the form (lambda (error)).
+ON-SENT is called with an alist containing `:request-id' after the
+request is registered and before it is written to the process.
 
 When non-nil SYNC, send request synchronously.
 When BUFFER is provided, callbacks executed within buffer context."
@@ -375,13 +450,15 @@ When BUFFER is provided, callbacks executed within buffer context."
     (error ":request is required"))
   (unless (acp--client-started-p client)
     (acp--start-client :client client))
-  (funcall (map-elt client :request-sender)
-           :client client
-           :request request
-           :buffer buffer
-           :on-success on-success
-           :on-failure on-failure
-           :sync sync))
+  (apply (map-elt client :request-sender)
+         :client client
+         :request request
+         :buffer buffer
+         :on-success on-success
+         :on-failure on-failure
+         :sync sync
+         (when on-sent
+           (list :on-sent on-sent))))
 
 (cl-defun acp-send-notification (&key client notification sync)
   "Send NOTIFICATION from CLIENT.
@@ -398,11 +475,13 @@ When non-nil SYNC, send notification synchronously."
            :notification notification
            :sync sync))
 
-(cl-defun acp--request-sender (&key client request buffer on-success on-failure sync)
+(cl-defun acp--request-sender (&key client request buffer on-success on-failure
+                                   on-sent sync)
   "Send REQUEST from CLIENT.
 
 ON-SUCCESS is of the form (lambda (response)).
 ON-FAILURE is of the form (lambda (error)).
+ON-SENT is called with the assigned request id before transmission.
 BUFFER: When non-nil, override CLIENT `:buffer-context' (see `acp-make-client').
 SYNC: When non-nil, send request synchronously."
   (unless client
@@ -443,11 +522,24 @@ SYNC: When non-nil, send request synchronously."
                 (lambda (data)
                   (setq result data
                         done 'error))))
-    (acp--log client "OUTGOING OBJECT" "%s" request)
-    (let ((json (acp--serialize-json request)))
-      (acp--log client "OUTGOING TEXT" "%s" json)
-      (acp--log-traffic client 'outgoing 'request (acp--make-message :object request :json json))
-      (process-send-string proc json))
+    (condition-case err
+        (progn
+          (when on-sent
+            (funcall on-sent (list (cons :request-id request-id))))
+          (acp--log client "OUTGOING OBJECT" "%s" request)
+          (let ((json (acp--serialize-json request)))
+            (acp--log client "OUTGOING TEXT" "%s" json)
+            (acp--log-traffic client 'outgoing 'request (acp--make-message :object request :json json))
+            (process-send-string proc json)))
+      (error
+       ;; Registration precedes serialization and transmission.  Any local
+       ;; failure must roll the registry back because no response can settle
+       ;; this request.
+       (map-put! client :pending-requests
+                 (assoc-delete-all
+                  request-id
+                  (map-elt client :pending-requests)))
+       (signal (car err) (cdr err))))
     (when sync
       (while (not done)
         (accept-process-output proc 0.01))
@@ -522,7 +614,8 @@ When non-nil SYNC, send notification synchronously."
 (cl-defun acp-make-initialize-request (&key protocol-version
                                             client-info
                                             read-text-file-capability
-                                            write-text-file-capability)
+                                            write-text-file-capability
+                                            elicitation-form-capability)
   "Instantiate an \"initialize\" request.
 
 PROTOCOL-VERSION is the version of the ACP protocol to use.
@@ -532,6 +625,8 @@ READ-TEXT-FILE-CAPABILITY is a boolean indicating if the client
 can read text files.
 WRITE-TEXT-FILE-CAPABILITY is a boolean indicating if the client
 can write text files.
+ELICITATION-FORM-CAPABILITY is a boolean indicating if the client
+can present form elicitations.
 
 See https://agentclientprotocol.com/protocol/schema#initializerequest
 and https://agentclientprotocol.com/protocol/schema#initializeresponse."
@@ -546,7 +641,13 @@ and https://agentclientprotocol.com/protocol/schema#initializeresponse."
                                                                  :false))
                                               (writeTextFile . ,(if write-text-file-capability
                                                                     t
-                                                                  :false))))))))))
+                                                                  :false))))
+                                       ,@(when elicitation-form-capability
+                                           ;; ACP capability values are empty JSON
+                                           ;; objects.  nil serializes as null, which
+                                           ;; means the capability is unsupported.
+                                           `((elicitation
+                                              . ((form . ,(make-hash-table))))))))))))
 
 (cl-defun acp-make-authenticate-request (&key method-id method)
   "Instantiate an \"authenticate\" request.
@@ -768,6 +869,25 @@ See https://agentclientprotocol.com/protocol/schema#requestpermissionresponse."
                                  '((outcome . "cancelled"))
                                `((outcome . "selected")
                                  (optionId . ,option-id))))))))
+
+(cl-defun acp-make-elicitation-response (&key request-id action content)
+  "Instantiate an \"elicitation/create\" response.
+
+REQUEST-ID is the ID of the request this is a response to.
+ACTION is one of \"accept\", \"decline\", or \"cancel\".
+CONTENT is the optional object submitted with an accepted form.
+
+See https://agentclientprotocol.com/protocol/v2/elicitation"
+  (unless request-id
+    (error ":request-id is required"))
+  (unless (member action '("accept" "decline" "cancel"))
+    (error ":action must be \"accept\", \"decline\", or \"cancel\""))
+  (when (and content (not (equal action "accept")))
+    (error ":content is only valid with the \"accept\" action"))
+  `((:request-id . ,request-id)
+    (:result . ((action . ,action)
+                ,@(when content
+                    `((content . ,content)))))))
 
 (cl-defun acp-make-fs-read-text-file-response (&key request-id content error)
   "Instantiate a \"fs/read_text_file\" response.
