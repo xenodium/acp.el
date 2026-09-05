@@ -137,8 +137,9 @@ the error is logged."
                     (when-let* ((std-error (cond
                                             ((acp--parse-stderr-api-error raw-output)
                                              (acp--parse-stderr-api-error raw-output))
-                                            ((not (string-empty-p (string-trim raw-output)))
-                                             ;; Fallback: create a generic error response
+                                            ((not (string-empty-p raw-output))
+                                             ;; Preserve whitespace-only chunks: consumers
+                                             ;; append messages to reconstruct stderr.
                                              (acp--make-internal-error raw-output)))))
                       (acp--log client "API-ERROR" "%s" (string-trim raw-output))
                       (dolist (handler (map-elt client :error-handlers))
