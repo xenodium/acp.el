@@ -32,6 +32,31 @@
       (when (buffer-live-p log-buffer)
         (kill-buffer log-buffer)))))
 
+(ert-deftest acp-test-stderr-preserves-whitespace-only-chunks ()
+  "Forward stderr chunks unchanged so consumers can concatenate them."
+  (let ((client (acp-make-client :command "cat"))
+        (acp-logging-enabled nil)
+        (chunks '("hello" " " "world" "\n" "\t" "next\n"))
+        stderr-buffer received)
+    (acp-subscribe-to-errors
+     :client client
+     :on-error (lambda (error-data)
+                 (should (= (map-elt error-data 'code) -32603))
+                 (push (map-elt error-data 'message) received)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (setq stderr-buffer (plist-get args :stderr))
+                       nil)))
+            (acp--start-client :client client))
+          (with-current-buffer stderr-buffer
+            (dolist (chunk chunks)
+              (insert chunk)))
+          (should (equal (nreverse received) chunks)))
+      (when (buffer-live-p stderr-buffer)
+        (kill-buffer stderr-buffer)))))
+
 (ert-deftest acp-test-trim-log-buffer-unibyte ()
   "Trim unibyte logs on whole-message boundaries."
   (let* ((msg1 (cons "A" "one"))
