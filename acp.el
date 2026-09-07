@@ -523,7 +523,9 @@ When non-nil SYNC, send notification synchronously."
 (cl-defun acp-make-initialize-request (&key protocol-version
                                             client-info
                                             read-text-file-capability
-                                            write-text-file-capability)
+                                            write-text-file-capability
+                                            elicitation-form-capability
+                                            elicitation-url-capability)
   "Instantiate an \"initialize\" request.
 
 PROTOCOL-VERSION is the version of the ACP protocol to use.
@@ -533,6 +535,10 @@ READ-TEXT-FILE-CAPABILITY is a boolean indicating if the client
 can read text files.
 WRITE-TEXT-FILE-CAPABILITY is a boolean indicating if the client
 can write text files.
+ELICITATION-FORM-CAPABILITY is a boolean indicating if the client
+can render \"form\" elicitations.
+ELICITATION-URL-CAPABILITY is a boolean indicating if the client
+can render \"url\" elicitations.
 
 See https://agentclientprotocol.com/protocol/schema#initializerequest
 and https://agentclientprotocol.com/protocol/schema#initializeresponse."
@@ -547,7 +553,14 @@ and https://agentclientprotocol.com/protocol/schema#initializeresponse."
                                                                  :false))
                                               (writeTextFile . ,(if write-text-file-capability
                                                                     t
-                                                                  :false))))))))))
+                                                                  :false))))
+                                       ,@(when (or elicitation-form-capability
+                                                   elicitation-url-capability)
+                                           `((elicitation
+                                              . (,@(when elicitation-form-capability
+                                                     '((form . nil)))
+                                                 ,@(when elicitation-url-capability
+                                                     '((url . nil)))))))))))))
 
 (cl-defun acp-make-authenticate-request (&key method-id method)
   "Instantiate an \"authenticate\" request.
