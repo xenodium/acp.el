@@ -191,6 +191,23 @@
       (should-not (buffer-live-p logs))
       (should-not (buffer-live-p traffic)))))
 
+(ert-deftest acp-test-session-list-request-omits-cursor-by-default ()
+  "Request the first page when no cursor is given."
+  (should (equal (acp-make-session-list-request :cwd "/tmp/")
+                 '((:method . "session/list")
+                   (:params . ((cwd . "/tmp")))))))
+
+(ert-deftest acp-test-session-list-request-includes-cursor ()
+  "Carry an opaque cursor into the next page request."
+  (should (equal (acp-make-session-list-request :cwd "/tmp/" :cursor "page-2")
+                 '((:method . "session/list")
+                   (:params . ((cwd . "/tmp")
+                               (cursor . "page-2")))))))
+
+(ert-deftest acp-test-session-list-request-requires-cwd ()
+  "Refuse to build a request without a cwd."
+  (should-error (acp-make-session-list-request :cursor "page-2")))
+
 (provide 'acp-test)
 
 ;;; acp-test.el ends here
