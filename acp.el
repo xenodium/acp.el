@@ -124,6 +124,7 @@ the error is logged."
          (pending-input "")
          (message-queue nil)
          (message-queue-busy nil)
+         (drain-queue nil)
          (process-environment (append (map-elt client :environment-variables)
                                       process-environment))
          (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
@@ -145,6 +146,51 @@ the error is logged."
                       (dolist (handler (map-elt client :error-handlers))
                         (funcall handler std-error)))))
                 nil t))
+    ;; Drains the queue in order, resetting the busy flag via
+    ;; `unwind-protect' and rescheduling itself when messages are left
+    ;; behind.  A non-local exit (a `quit' from C-g, or an error while
+    ;; `debug-on-error' is set) would otherwise unwind out of the timer
+    ;; with the queue still flagged busy, so no later message is ever
+    ;; routed and the client silently stops responding.
+    (setq drain-queue
+          (lambda ()
+            (unwind-protect
+                (while message-queue
+                  ;; Bind print variables so the debugger
+                  ;; can safely print the client alist
+                  ;; without infinite recursion (#360).
+                  (let ((message (car message-queue))
+                        ;; Handle circular refs in client alist.
+                        (print-circle t)
+                        ;; Cap nesting depth.
+                        (print-level 25)
+                        ;; Cap list elements printed.
+                        (print-length 200))
+                    (setq message-queue (cdr message-queue))
+                    (acp--route-incoming-message
+                     :message message
+                     :client client
+                     :on-notification
+                     (lambda (notification)
+                       (dolist (handler (map-elt client :notification-handlers))
+                         (condition-case-unless-debug err
+                             (funcall handler notification)
+                           (error
+                            (acp--log client "NOTIFICATION HANDLER ERROR"
+                                      "Failed with error: %S" err)))))
+                     :on-request
+                     (lambda (request)
+                       (dolist (handler (map-elt client :request-handlers))
+                         (condition-case-unless-debug err
+                             (funcall handler request)
+                           (error
+                            (acp--log client "REQUEST HANDLER ERROR"
+                                      "Failed with error: %S" err))))))))
+              ;; Keep the busy flag raised while a drain is still
+              ;; pending, so the filter doesn't schedule a second one.
+              (if message-queue
+                  (run-at-time 0 nil drain-queue)
+                (setq message-queue-busy nil)))))
     (let ((process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
@@ -173,40 +219,7 @@ the error is logged."
                                                     (list (acp--make-message :json json :object object))))
                                       (unless message-queue-busy
                                         (setq message-queue-busy t)
-                                        (run-at-time 0 nil
-                                                     (lambda ()
-                                                       (while message-queue
-                                                         ;; Bind print variables so the debugger
-                                                         ;; can safely print the client alist
-                                                         ;; without infinite recursion (#360).
-                                                         (let ((message (car message-queue))
-                                                               ;; Handle circular refs in client alist.
-                                                               (print-circle t)
-                                                               ;; Cap nesting depth.
-                                                               (print-level 25)
-                                                               ;; Cap list elements printed.
-                                                               (print-length 200))
-                                                           (setq message-queue (cdr message-queue))
-                                                           (acp--route-incoming-message
-                                                            :message message
-                                                            :client client
-                                                            :on-notification
-                                                            (lambda (notification)
-                                                              (dolist (handler (map-elt client :notification-handlers))
-                                                                (condition-case-unless-debug err
-                                                                    (funcall handler notification)
-                                                                  (error
-                                                                   (acp--log client "NOTIFICATION HANDLER ERROR"
-                                                                             "Failed with error: %S" err)))))
-                                                            :on-request
-                                                            (lambda (request)
-                                                              (dolist (handler (map-elt client :request-handlers))
-                                                                (condition-case-unless-debug err
-                                                                    (funcall handler request)
-                                                                  (error
-                                                                   (acp--log client "REQUEST HANDLER ERROR"
-                                                                             "Failed with error: %S" err))))))))
-                                                       (setq message-queue-busy nil))))))
+                                        (run-at-time 0 nil drain-queue))))
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
                     :sentinel (lambda (process event)
