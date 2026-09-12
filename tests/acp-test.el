@@ -208,6 +208,76 @@
   "Refuse to build a request without a cwd."
   (should-error (acp-make-session-list-request :cursor "page-2")))
 
+(defun acp-test--captured-filter (client)
+  "Start CLIENT with a stubbed process and return its `:filter'."
+  (let (filter)
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args)
+                 (setq filter (plist-get args :filter))
+                 nil)))
+      (acp--start-client :client client))
+    filter))
+
+(defun acp-test--notification-line (n)
+  "Return a newline-terminated notification carrying number N."
+  (format "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"n\":%d}}\n" n))
+
+(defun acp-test--drain (&optional timeout)
+  "Run pending timers for up to TIMEOUT seconds, defaulting to 1."
+  (let ((deadline (+ (float-time) (or timeout 1))))
+    (while (< (float-time) deadline)
+      ;; The drain reschedules itself, so keep pumping rather than
+      ;; assuming a single timer runs everything.
+      (condition-case nil
+          (accept-process-output nil 0.02)
+        (quit nil)))))
+
+(ert-deftest acp-test-drain-survives-quitting-notification-handler ()
+  "Keep routing queued messages after a handler exits non-locally."
+  (let* ((acp-logging-enabled nil)
+         (client (acp-make-client :command "cat"))
+         received filter)
+    (acp-subscribe-to-notifications
+     :client client
+     :on-notification (lambda (notification)
+                        (let ((n (map-nested-elt notification '(params n))))
+                          (push n received)
+                          ;; Stand in for C-g arriving mid-drain.
+                          (when (= n 2)
+                            (signal 'quit nil)))))
+    (unwind-protect
+        (progn
+          (setq filter (acp-test--captured-filter client))
+          (funcall filter nil (mapconcat #'acp-test--notification-line '(1 2 3 4) ""))
+          (acp-test--drain)
+          ;; 3 and 4 are queued behind the quitting handler: without a
+          ;; rescheduled drain they are never routed.
+          (should (equal (nreverse received) '(1 2 3 4))))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-drain-unwedges-queue-after-quitting-handler ()
+  "Route messages arriving after a handler exited non-locally."
+  (let* ((acp-logging-enabled nil)
+         (client (acp-make-client :command "cat"))
+         received filter)
+    (acp-subscribe-to-notifications
+     :client client
+     :on-notification (lambda (notification)
+                        (let ((n (map-nested-elt notification '(params n))))
+                          (push n received)
+                          (when (= n 1)
+                            (signal 'quit nil)))))
+    (unwind-protect
+        (progn
+          (setq filter (acp-test--captured-filter client))
+          (funcall filter nil (acp-test--notification-line 1))
+          (acp-test--drain)
+          ;; A stuck busy flag would swallow every later message.
+          (funcall filter nil (acp-test--notification-line 2))
+          (acp-test--drain)
+          (should (equal (nreverse received) '(1 2))))
+      (acp-shutdown :client client))))
+
 (provide 'acp-test)
 
 ;;; acp-test.el ends here
