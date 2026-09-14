@@ -62,7 +62,6 @@
   (let* ((msg1 (cons "A" "one"))
          (msg2 (cons "B" "two"))
          (msg3 (cons "C" "three"))
-         (log1 (acp-test--format-log-message msg1))
          (log2 (acp-test--format-log-message msg2))
          (log3 (acp-test--format-log-message msg3))
          (max-bytes (+ (string-bytes log2) (string-bytes log3)))
@@ -76,7 +75,6 @@
   (let* ((msg1 (cons "A" "alpha"))
          (msg2 (cons "B" "café ✓"))
          (msg3 (cons "C" "omega"))
-         (log1 (acp-test--format-log-message msg1))
          (log2 (acp-test--format-log-message msg2))
          (log3 (acp-test--format-log-message msg3))
          (chars-m2m3 (+ (length log2) (length log3)))
@@ -99,8 +97,8 @@
           :client client
           :request '((:method . "initialize"))
           :sync t))
-      (when-let ((process (map-elt client :process))
-                 ((process-live-p process)))
+      (when-let* ((process (map-elt client :process))
+                  ((process-live-p process)))
         (delete-process process)))))
 
 (defun acp-test--exited-client ()
@@ -222,15 +220,20 @@
   "Return a newline-terminated notification carrying number N."
   (format "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"n\":%d}}\n" n))
 
-(defun acp-test--drain (&optional timeout)
-  "Run pending timers for up to TIMEOUT seconds, defaulting to 1."
+(defun acp-test--drain-until (predicate &optional timeout)
+  "Return non-nil once PREDICATE does, running timers for up to TIMEOUT seconds.
+
+TIMEOUT defaults to 1.  Returns nil if PREDICATE never held."
   (let ((deadline (+ (float-time) (or timeout 1))))
-    (while (< (float-time) deadline)
+    (while (and (not (funcall predicate))
+                (< (float-time) deadline))
       ;; The drain reschedules itself, so keep pumping rather than
-      ;; assuming a single timer runs everything.
+      ;; assuming a single timer runs everything.  A quitting handler
+      ;; signals through `accept-process-output', so contain it here.
       (condition-case nil
           (accept-process-output nil 0.02)
-        (quit nil)))))
+        (quit nil)))
+    (funcall predicate)))
 
 (ert-deftest acp-test-drain-survives-quitting-notification-handler ()
   "Keep routing queued messages after a handler exits non-locally."
@@ -249,7 +252,7 @@
         (progn
           (setq filter (acp-test--captured-filter client))
           (funcall filter nil (mapconcat #'acp-test--notification-line '(1 2 3 4) ""))
-          (acp-test--drain)
+          (acp-test--drain-until (lambda () (= (length received) 4)))
           ;; 3 and 4 are queued behind the quitting handler: without a
           ;; rescheduled drain they are never routed.
           (should (equal (nreverse received) '(1 2 3 4))))
@@ -271,10 +274,60 @@
         (progn
           (setq filter (acp-test--captured-filter client))
           (funcall filter nil (acp-test--notification-line 1))
-          (acp-test--drain)
+          (acp-test--drain-until (lambda () (= (length received) 1)))
           ;; A stuck busy flag would swallow every later message.
           (funcall filter nil (acp-test--notification-line 2))
-          (acp-test--drain)
+          (acp-test--drain-until (lambda () (= (length received) 2)))
+          (should (equal (nreverse received) '(1 2))))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-drain-survives-repeated-quitting-handler ()
+  "Drain the whole queue when every handler exits non-locally."
+  (let* ((acp-logging-enabled nil)
+         (client (acp-make-client :command "cat"))
+         received filter)
+    (acp-subscribe-to-notifications
+     :client client
+     :on-notification (lambda (notification)
+                        (push (map-nested-elt notification '(params n)) received)
+                        (signal 'quit nil)))
+    (unwind-protect
+        (progn
+          (setq filter (acp-test--captured-filter client))
+          (funcall filter nil (mapconcat #'acp-test--notification-line '(1 2 3 4 5) ""))
+          ;; Each exit drops its own message before rescheduling, so the
+          ;; queue shrinks instead of retrying the same message forever.
+          (acp-test--drain-until (lambda () (= (length received) 5)))
+          (should (equal (nreverse received) '(1 2 3 4 5))))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-drain-survives-unroutable-message ()
+  "Keep routing after a message that routing itself cannot handle.
+
+A JSON line that parses to something other than an object signals from
+the drain rather than from a handler, so no `condition-case' contains
+it."
+  (let* ((acp-logging-enabled nil)
+         (client (acp-make-client :command "cat"))
+         received filter)
+    (acp-subscribe-to-notifications
+     :client client
+     :on-notification (lambda (notification)
+                        (push (map-nested-elt notification '(params n)) received)))
+    (unwind-protect
+        (progn
+          (setq filter (acp-test--captured-filter client))
+          ;; Queued behind the unroutable message, 1 needs a rescheduled
+          ;; drain to reach a handler at all.
+          (funcall filter nil (concat "[1,2]\n" (acp-test--notification-line 1)))
+          ;; Routing the unroutable message signals, and the timer
+          ;; reports that.  Expected here, so keep it out of the logs.
+          (let ((inhibit-message t)
+                (message-log-max nil))
+            (acp-test--drain-until (lambda () (= (length received) 1))))
+          ;; And 2 needs the busy flag to have been cleared.
+          (funcall filter nil (acp-test--notification-line 2))
+          (acp-test--drain-until (lambda () (= (length received) 2)))
           (should (equal (nreverse received) '(1 2))))
       (acp-shutdown :client client))))
 

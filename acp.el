@@ -148,10 +148,15 @@ the error is logged."
                 nil t))
     ;; Drains the queue in order, resetting the busy flag via
     ;; `unwind-protect' and rescheduling itself when messages are left
-    ;; behind.  A non-local exit (a `quit' from C-g, or an error while
-    ;; `debug-on-error' is set) would otherwise unwind out of the timer
+    ;; behind.  A non-local exit would otherwise unwind out of the timer
     ;; with the queue still flagged busy, so no later message is ever
     ;; routed and the client silently stops responding.
+    ;;
+    ;; Timers run with `inhibit-quit' bound to t, so a bare C-g cannot
+    ;; interrupt a drain.  Exits still arrive from a handler reading
+    ;; input (aborting a minibuffer prompt signals `quit'), from
+    ;; quitting the debugger when `debug-on-error' is set, and from any
+    ;; error signalled outside the contained handler calls below.
     (setq drain-queue
           (lambda ()
             (unwind-protect
