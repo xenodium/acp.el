@@ -43,7 +43,9 @@
   "Keymap for ACP-Traffic mode.")
 
 (defun acp-traffic-save-to ()
-  "Save traffic objects to a file."
+  "Save traffic objects to a file and return its path.
+
+For example, choosing \"~/bug.traffic\" returns \"~/bug.traffic\"."
   (interactive)
   (unless (derived-mode-p 'acp-traffic-mode)
     (user-error "Not in a traffic buffer"))
@@ -56,7 +58,8 @@
       (erase-buffer)
       (let ((print-circle t))
         (pp objects (current-buffer))))
-    (message "Saved %s" destination)))
+    (message "Saved %s" destination)
+    destination))
 
 (defun acp-traffic-read-file (traffic-file)
   "Read TRAFFIC-FILE into message objects."
