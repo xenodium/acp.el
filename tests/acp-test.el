@@ -331,6 +331,101 @@ it."
           (should (equal (nreverse received) '(1 2))))
       (acp-shutdown :client client))))
 
+(ert-deftest acp-test-drain-yields-between-batches ()
+  "Stop a drain once its time budget is spent, resuming on the next one.
+
+A backlog that outlasts the budget must be routed across several
+callbacks rather than one, so Emacs gets a chance to redisplay and read
+input in between."
+  (let* ((acp-logging-enabled nil)
+         (acp-drain-time-budget 0.01)
+         (client (acp-make-client :command "cat"))
+         (drains 0)
+         received filter)
+    (acp-subscribe-to-notifications
+     :client client
+     :on-notification (lambda (notification)
+                        ;; Outlasts the budget, so the second message of
+                        ;; any batch is already over it.
+                        (sleep-for 0.02)
+                        (push (map-nested-elt notification '(params n)) received)))
+    (unwind-protect
+        (progn
+          (setq filter (acp-test--captured-filter client))
+          (advice-add 'timer-event-handler :before
+                      (lambda (&rest _) (setq drains (1+ drains)))
+                      '((name . acp-test-count-drains)))
+          (unwind-protect
+              (progn
+                (funcall filter nil (mapconcat #'acp-test--notification-line
+                                               '(1 2 3 4) ""))
+                (should (acp-test--drain-until
+                         (lambda () (= (length received) 4)) 3)))
+            (advice-remove 'timer-event-handler 'acp-test-count-drains))
+          ;; Order is preserved and nothing is dropped.
+          (should (equal (nreverse received) '(1 2 3 4)))
+          ;; One callback per message: the budget is spent by the first
+          ;; handler, so each batch routes one and reschedules.  A single
+          ;; drain for the whole backlog would be the unbatched behavior.
+          (should (>= drains 4)))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-drain-routes-one-message-per-batch-minimum ()
+  "Route at least one message per drain however small the budget is.
+
+Testing the budget after routing (not before) is what keeps a zero
+budget from spinning on a queue it never advances."
+  (let* ((acp-logging-enabled nil)
+         (acp-drain-time-budget 0)
+         (client (acp-make-client :command "cat"))
+         received filter)
+    (acp-subscribe-to-notifications
+     :client client
+     :on-notification (lambda (notification)
+                        (push (map-nested-elt notification '(params n)) received)))
+    (unwind-protect
+        (progn
+          (setq filter (acp-test--captured-filter client))
+          (funcall filter nil (mapconcat #'acp-test--notification-line
+                                         '(1 2 3) ""))
+          (should (acp-test--drain-until (lambda () (= (length received) 3)) 3))
+          (should (equal (nreverse received) '(1 2 3))))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-drain-without-budget-empties-queue-in-one-batch ()
+  "Drain the whole queue in a single callback when the budget is nil."
+  (let* ((acp-logging-enabled nil)
+         (acp-drain-time-budget nil)
+         (client (acp-make-client :command "cat"))
+         (batch-sizes nil)
+         (routed 0)
+         received filter)
+    (acp-subscribe-to-notifications
+     :client client
+     :on-notification (lambda (notification)
+                        (setq routed (1+ routed))
+                        (push (map-nested-elt notification '(params n)) received)))
+    (unwind-protect
+        (progn
+          (setq filter (acp-test--captured-filter client))
+          (advice-add 'timer-event-handler :around
+                      (lambda (orig &rest args)
+                        (let ((before routed))
+                          (apply orig args)
+                          (when (> routed before)
+                            (push (- routed before) batch-sizes))))
+                      '((name . acp-test-batch-sizes)))
+          (unwind-protect
+              (progn
+                (funcall filter nil (mapconcat #'acp-test--notification-line
+                                               '(1 2 3 4 5) ""))
+                (should (acp-test--drain-until
+                         (lambda () (= (length received) 5)) 3)))
+            (advice-remove 'timer-event-handler 'acp-test-batch-sizes))
+          (should (equal (nreverse received) '(1 2 3 4 5)))
+          (should (equal batch-sizes '(5))))
+      (acp-shutdown :client client))))
+
 (provide 'acp-test)
 
 ;;; acp-test.el ends here
