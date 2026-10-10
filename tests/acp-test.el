@@ -340,7 +340,8 @@ input in between."
   (let* ((acp-logging-enabled nil)
          (acp-drain-time-budget 0.01)
          (client (acp-make-client :command "cat"))
-         (drains 0)
+         (batch-sizes nil)
+         (routed 0)
          received filter)
     (acp-subscribe-to-notifications
      :client client
@@ -348,26 +349,30 @@ input in between."
                         ;; Outlasts the budget, so the second message of
                         ;; any batch is already over it.
                         (sleep-for 0.02)
+                        (setq routed (1+ routed))
                         (push (map-nested-elt notification '(params n)) received)))
     (unwind-protect
         (progn
           (setq filter (acp-test--captured-filter client))
-          (advice-add 'timer-event-handler :before
-                      (lambda (&rest _) (setq drains (1+ drains)))
-                      '((name . acp-test-count-drains)))
+          (advice-add 'timer-event-handler :around
+                      (lambda (orig &rest args)
+                        (let ((before routed))
+                          (apply orig args)
+                          (when (> routed before)
+                            (push (- routed before) batch-sizes))))
+                      '((name . acp-test-batch-sizes)))
           (unwind-protect
               (progn
                 (funcall filter nil (mapconcat #'acp-test--notification-line
                                                '(1 2 3 4) ""))
                 (should (acp-test--drain-until
                          (lambda () (= (length received) 4)) 3)))
-            (advice-remove 'timer-event-handler 'acp-test-count-drains))
+            (advice-remove 'timer-event-handler 'acp-test-batch-sizes))
           ;; Order is preserved and nothing is dropped.
           (should (equal (nreverse received) '(1 2 3 4)))
-          ;; One callback per message: the budget is spent by the first
-          ;; handler, so each batch routes one and reschedules.  A single
-          ;; drain for the whole backlog would be the unbatched behavior.
-          (should (>= drains 4)))
+          ;; The first handler spends the budget, so each drain routes
+          ;; one message and reschedules.
+          (should (equal batch-sizes '(1 1 1 1))))
       (acp-shutdown :client client))))
 
 (ert-deftest acp-test-drain-routes-one-message-per-batch-minimum ()

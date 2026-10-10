@@ -58,21 +58,14 @@ See `acp-logs-buffer' to view the resulting log."
 (defcustom acp-drain-time-budget 0.02
   "Seconds a single message-queue drain may spend routing messages.
 
-Incoming messages are routed from a timer, and routing runs the
-client's handlers, which typically render into a buffer.  A drain
-that empties the whole queue in one callback holds the main thread
-for as long as that takes: a fast-streaming agent can queue messages
-faster than they render, and Emacs stops redisplaying and reading
-input until the backlog clears.
+Routing runs client handlers, which typically render.  Once the budget
+is spent, the drain reschedules itself so Emacs can redisplay and read
+input before routing resumes.  Order is preserved and nothing is
+dropped.
 
-Once the budget is spent, the drain reschedules itself and returns,
-letting Emacs redisplay and process input before routing resumes.
-The queue is still drained in order and nothing is dropped; only the
-latency of any one callback is bounded.
-
-At least one message is routed per drain, so progress is guaranteed
-however small the budget is, and a single slow handler always runs to
-completion.  Set to nil to drain the whole queue in one callback."
+At least one message is routed per drain, so a budget smaller than a
+single handler still makes progress.  Nil drains the whole queue in one
+callback."
   :type '(choice (number :tag "Seconds")
                  (const :tag "No limit" nil))
   :group 'acp)
@@ -180,22 +173,14 @@ the error is logged."
     ;; quitting the debugger when `debug-on-error' is set, and from any
     ;; error signalled outside the contained handler calls below.
     ;;
-    ;; Routing runs the client's handlers, which render, so emptying the
-    ;; whole queue in one callback holds the main thread for as long as
-    ;; the backlog takes: an agent streaming faster than it renders stalls
-    ;; redisplay and input until it clears.  Stop once
-    ;; `acp-drain-time-budget' is spent and let the reschedule below
-    ;; resume routing, so Emacs gets between batches.  Order is preserved
-    ;; and nothing is dropped; only one callback's latency is bounded.
+    ;; Each drain stops once `acp-drain-time-budget' is spent, leaving
+    ;; the rest to the reschedule below.
     (setq drain-queue
           (lambda ()
             (let ((deadline (when acp-drain-time-budget
                               (+ (float-time) acp-drain-time-budget)))
-                  ;; Checked after routing rather than before, so a drain
-                  ;; always routes at least one message: progress must not
-                  ;; depend on the budget outlasting a single handler, or a
-                  ;; budget too small to fit one would reschedule forever
-                  ;; without ever advancing the queue.
+                  ;; Checked after routing, so every drain routes at
+                  ;; least one message and a tiny budget can't spin.
                   (within-budget t))
               (unwind-protect
                   (while (and message-queue within-budget)
@@ -233,8 +218,6 @@ the error is logged."
                                               (< (float-time) deadline)))))
                 ;; Keep the busy flag raised while a drain is still
                 ;; pending, so the filter doesn't schedule a second one.
-                ;; Also how a budget-limited batch resumes: whatever is
-                ;; left is picked up by the next drain.
                 (if message-queue
                     (run-at-time 0 nil drain-queue)
                   (setq message-queue-busy nil))))))
