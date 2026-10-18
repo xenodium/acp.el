@@ -202,9 +202,13 @@
                    (:params . ((cwd . "/tmp")
                                (cursor . "page-2")))))))
 
-(ert-deftest acp-test-session-list-request-requires-cwd ()
-  "Refuse to build a request without a cwd."
-  (should-error (acp-make-session-list-request :cursor "page-2")))
+(ert-deftest acp-test-session-list-request-without-cwd ()
+  "Serialize unfiltered requests with an empty params object."
+  (should (equal (acp--serialize-json (map-elt (acp-make-session-list-request) :params))
+                 "{}\n"))
+  (should (equal (acp-make-session-list-request :cursor "page-2")
+                 '((:method . "session/list")
+                   (:params . ((cursor . "page-2")))))))
 
 (defun acp-test--captured-filter (client)
   "Start CLIENT with a stubbed process and return its `:filter'."
