@@ -762,7 +762,8 @@ See https://agentclientprotocol.com/rfds/session-fork."
 (cl-defun acp-make-session-list-request (&key cwd cursor)
   "Instantiate a \"session/list\" request.
 
-CWD is the current working directory used to filter sessions.
+CWD is an optional working directory used to filter sessions.
+When omitted, list sessions across all working directories.
 CURSOR is an optional opaque token, taken from the `nextCursor' of a
 previous \"session/list\" response, requesting the page that follows it.
 Omit it to request the first page.
@@ -778,12 +779,12 @@ Omit it to request the first page.
 Note: This is an unstable ACP feature.
 
 See https://agentclientprotocol.com/rfds/session-list."
-  (unless cwd
-    (error ":cwd is required"))
   `((:method . "session/list")
-    ;; directory-file-name removes any trailing /
-    (:params . ((cwd . ,(directory-file-name (expand-file-name cwd)))
-                ,@(when cursor `((cursor . ,cursor)))))))
+    (:params . ,(or (append
+                     (when cwd
+                       `((cwd . ,(directory-file-name (expand-file-name cwd)))))
+                     (when cursor `((cursor . ,cursor))))
+                    (make-hash-table)))))
 
 (cl-defun acp-make-session-load-request (&key session-id cwd mcp-servers meta)
   "Instantiate a \"session/load\" request.
