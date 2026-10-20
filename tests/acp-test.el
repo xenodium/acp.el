@@ -189,6 +189,37 @@
       (should-not (buffer-live-p logs))
       (should-not (buffer-live-p traffic)))))
 
+(ert-deftest acp-test-shutdown-lets-agent-handle-sigterm ()
+  "Send SIGTERM first, so the agent can stop the processes it started."
+  (let* ((marker (make-temp-file "acp-test-sigterm-"))
+         (client (acp-make-client
+                  :command "sh"
+                  :command-params
+                  (list "-c" (format "trap 'echo term > %1$s; exit 0' TERM; \
+echo ready > %1$s; while :; do sleep 0.05; done"
+                                     (shell-quote-argument marker)))))
+         (read-marker (lambda ()
+                        (with-temp-buffer
+                          (insert-file-contents marker)
+                          (buffer-string))))
+         process)
+    (unwind-protect
+        (progn
+          (acp--start-client :client client)
+          (setq process (map-elt client :process))
+          (with-timeout (2 (ert-fail "Agent did not start"))
+            (while (equal (funcall read-marker) "")
+              (accept-process-output nil 0.05)))
+          (acp-shutdown :client client)
+          (with-timeout (2 (ert-fail "Agent did not exit on SIGTERM"))
+            (while (process-live-p process)
+              (accept-process-output nil 0.05)))
+          (should (eq (process-status process) 'exit))
+          (should (equal (funcall read-marker) "term\n")))
+      (when (process-live-p process)
+        (delete-process process))
+      (delete-file marker))))
+
 (ert-deftest acp-test-session-list-request-omits-cursor-by-default ()
   "Request the first page when no cursor is given."
   (should (equal (acp-make-session-list-request :cwd "/tmp/")
