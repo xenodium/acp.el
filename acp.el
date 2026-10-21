@@ -259,6 +259,13 @@ the error is logged."
                                   (acp--fail-pending-requests :client client :event event))))))
       (map-put! client :process process))))
 
+(defvar acp--shutdown-grace-period 5
+  "Seconds `acp-shutdown' waits for the agent to exit before killing it.
+
+Shutdown first sends the agent SIGTERM, so it can stop the processes
+it started itself, such as tool commands running in their own sessions.
+A SIGKILL leaves those running.")
+
 (defun acp--make-internal-error (message)
   "Build a synthetic JSON-RPC-shaped error alist with MESSAGE.
 
@@ -398,7 +405,9 @@ never started) is still fully released.  Safe to call repeatedly."
   (map-put! client :pending-requests nil)
   (when-let* ((process (map-elt client :process)))
     (when (process-live-p process)
-      (delete-process process))
+      (set-process-filter process #'ignore)
+      (signal-process process 'SIGTERM)
+      (run-at-time acp--shutdown-grace-period nil #'delete-process process))
     (map-put! client :process nil))
   (when-let* ((buffer (get-buffer (acp--logs-buffer-name client))))
     (kill-buffer buffer))
