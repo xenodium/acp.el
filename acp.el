@@ -262,9 +262,9 @@ the error is logged."
 (defvar acp--shutdown-grace-period 5
   "Seconds `acp-shutdown' waits for the agent to exit before killing it.
 
-Shutdown first sends the agent SIGTERM, so it can stop the processes
-it started itself, such as tool commands running in their own sessions.
-A SIGKILL leaves those running.")
+Shutdown first sends the agent's process group SIGTERM, so the agent
+can stop the processes it started itself, such as tool commands running
+in their own sessions.  A SIGKILL leaves those running.")
 
 (defun acp--make-internal-error (message)
   "Build a synthetic JSON-RPC-shaped error alist with MESSAGE.
@@ -406,8 +406,20 @@ never started) is still fully released.  Safe to call repeatedly."
   (when-let* ((process (map-elt client :process)))
     (when (process-live-p process)
       (set-process-filter process #'ignore)
-      (signal-process process 'SIGTERM)
-      (run-at-time acp--shutdown-grace-period nil #'delete-process process))
+      ;; A negative pid signals the agent's whole process group.
+      ;; Remote (TRAMP) processes are signalled individually.
+      (if (process-get process 'remote-pid)
+          (signal-process process 'SIGTERM)
+        (signal-process (- (process-id process)) 'SIGTERM))
+      (run-at-time acp--shutdown-grace-period nil
+                   (lambda ()
+                     ;; `delete-process' sends nothing once the agent has
+                     ;; exited, so kill the group explicitly to catch
+                     ;; children the agent left behind.
+                     (unless (process-get process 'remote-pid)
+                       (ignore-errors
+                         (signal-process (- (process-id process)) 'SIGKILL)))
+                     (delete-process process))))
     (map-put! client :process nil))
   (when-let* ((buffer (get-buffer (acp--logs-buffer-name client))))
     (kill-buffer buffer))

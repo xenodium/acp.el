@@ -220,6 +220,32 @@ echo ready > %1$s; while :; do sleep 0.05; done"
         (delete-process process))
       (delete-file marker))))
 
+(ert-deftest acp-test-shutdown-stops-agent-process-group ()
+  "Stop children in the agent's process group, even if the agent exits first."
+  (let* ((marker (make-temp-file "acp-test-group-"))
+         (client (acp-make-client
+                  :command "sh"
+                  :command-params
+                  (list "-c" (format "sleep 300 & echo $! > %s; wait"
+                                     (shell-quote-argument marker)))))
+         (acp--shutdown-grace-period 0.2)
+         child)
+    (unwind-protect
+        (progn
+          (acp--start-client :client client)
+          (with-timeout (2 (ert-fail "Agent did not start"))
+            (while (zerop (setq child (with-temp-buffer
+                                        (insert-file-contents marker)
+                                        (string-to-number (buffer-string)))))
+              (accept-process-output nil 0.05)))
+          (acp-shutdown :client client)
+          (with-timeout (2 (ert-fail "Child outlived shutdown"))
+            (while (zerop (signal-process child 0))
+              (accept-process-output nil 0.05))))
+      (when (and child (> child 0))
+        (ignore-errors (signal-process child 'SIGKILL)))
+      (delete-file marker))))
+
 (ert-deftest acp-test-session-list-request-omits-cursor-by-default ()
   "Request the first page when no cursor is given."
   (should (equal (acp-make-session-list-request :cwd "/tmp/")
