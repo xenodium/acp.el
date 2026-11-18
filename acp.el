@@ -639,16 +639,31 @@ See https://agentclientprotocol.com/protocol/schema#authenticaterequest."
                         (when method
                           `((authMethod . ,method)))))))
 
-(cl-defun acp-make-session-new-request (&key cwd mcp-servers meta)
+(cl-defun acp--make-system-prompt-param (&key system-prompt)
+  "Return the \"systemPrompt\" session param appending SYSTEM-PROMPT.
+
+Return nil if SYSTEM-PROMPT is nil, so callers can splice it in.
+
+  (acp--make-system-prompt-param :system-prompt \"Be terse.\")
+  ;; => ((systemPrompt (mode . \"append\")
+  ;;                   (content . [((type . \"text\")
+  ;;                                (text . \"Be terse.\"))])))
+
+See https://agentclientprotocol.com/rfds/client-system-prompt."
+  (when system-prompt
+    `((systemPrompt . ((mode . "append")
+                       (content . [((type . "text")
+                                    (text . ,system-prompt))]))))))
+
+(cl-defun acp-make-session-new-request (&key cwd mcp-servers meta system-prompt)
   "Instantiate a \"session/new\" request.
 
 CWD is the current working directory for the session.
 MCP-SERVERS is a list of MCP servers to use.
 META is an optional alist of metadata to pass to the agent.
-  Supported keys include:
-  - `systemPrompt': Either a string (replaces default) or
-    an alist with key `append' containing a string to append
-    to the default system prompt.
+SYSTEM-PROMPT is an optional string appended to the agent's default
+system prompt.  Only send it if the agent advertises the
+`sessionCapabilities.systemPrompt' capability.
 
 See https://agentclientprotocol.com/protocol/schema#newsessionrequest
 and https://agentclientprotocol.com/protocol/schema#newsessionresponse."
@@ -658,7 +673,8 @@ and https://agentclientprotocol.com/protocol/schema#newsessionresponse."
     ;; directory-file-name removes any trailing /
     (:params . ((cwd . ,(directory-file-name (expand-file-name cwd)))
                 (mcpServers . ,(or mcp-servers []))
-                ,@(when meta `((_meta . ,meta)))))))
+                ,@(when meta `((_meta . ,meta)))
+                ,@(acp--make-system-prompt-param :system-prompt system-prompt)))))
 
 (cl-defun acp-make-session-prompt-request (&key session-id prompt)
   "Instantiate a \"session/prompt\" request.
@@ -728,13 +744,16 @@ See https://agentclientprotocol.com/protocol/session-config-options"
                 (configId . ,config-id)
                 (value . ,value)))))
 
-(cl-defun acp-make-session-resume-request (&key session-id cwd mcp-servers meta)
+(cl-defun acp-make-session-resume-request (&key session-id cwd mcp-servers meta system-prompt)
   "Instantiate a \"session/resume\" request.
 
 SESSION-ID is the ID of the session to resume.
 CWD is the current working directory for the resumed session.
 MCP-SERVERS is an optional list of MCP servers to use.
 META is an optional alist of metadata to pass to the agent.
+SYSTEM-PROMPT is an optional string appended to the agent's default
+system prompt.  Only send it if the agent advertises the
+`sessionCapabilities.systemPrompt' capability.
 
 This method resumes an existing session without returning previous messages
 \(unlike `session/load').  Only available if the agent advertises the
@@ -752,15 +771,19 @@ See https://agentclientprotocol.com/rfds/session-resume."
                 ;; directory-file-name removes any trailing /
                 (cwd . ,(directory-file-name (expand-file-name cwd)))
                 (mcpServers . ,(or mcp-servers []))
-                ,@(when meta `((_meta . ,meta)))))))
+                ,@(when meta `((_meta . ,meta)))
+                ,@(acp--make-system-prompt-param :system-prompt system-prompt)))))
 
-(cl-defun acp-make-session-fork-request (&key session-id cwd mcp-servers meta)
+(cl-defun acp-make-session-fork-request (&key session-id cwd mcp-servers meta system-prompt)
   "Instantiate a \"session/fork\" request.
 
 SESSION-ID is the ID of the session to fork from.
 CWD is the current working directory for the forked session.
 MCP-SERVERS is an optional list of MCP servers to use.
 META is an optional alist of metadata to pass to the agent.
+SYSTEM-PROMPT is an optional string appended to the agent's default
+system prompt.  Only send it if the agent advertises the
+`sessionCapabilities.systemPrompt' capability.
 
 This method forks an existing session, creating a new session that
 shares the conversation history of the original.  Only available if the
@@ -778,7 +801,8 @@ See https://agentclientprotocol.com/rfds/session-fork."
                 ;; directory-file-name removes any trailing /
                 (cwd . ,(directory-file-name (expand-file-name cwd)))
                 (mcpServers . ,(or mcp-servers []))
-                ,@(when meta `((_meta . ,meta)))))))
+                ,@(when meta `((_meta . ,meta)))
+                ,@(acp--make-system-prompt-param :system-prompt system-prompt)))))
 
 (cl-defun acp-make-session-list-request (&key cwd cursor)
   "Instantiate a \"session/list\" request.
@@ -807,13 +831,16 @@ See https://agentclientprotocol.com/rfds/session-list."
                      (when cursor `((cursor . ,cursor))))
                     (make-hash-table)))))
 
-(cl-defun acp-make-session-load-request (&key session-id cwd mcp-servers meta)
+(cl-defun acp-make-session-load-request (&key session-id cwd mcp-servers meta system-prompt)
   "Instantiate a \"session/load\" request.
 
 SESSION-ID is the ID of the session to load.
 CWD is the current working directory for the loaded session.
 MCP-SERVERS is an optional list of MCP servers to use.
 META is an optional alist of metadata to pass to the agent.
+SYSTEM-PROMPT is an optional string appended to the agent's default
+system prompt.  Only send it if the agent advertises the
+`sessionCapabilities.systemPrompt' capability.
 
 See https://agentclientprotocol.com/protocol/schema#session-load."
   (unless session-id
@@ -825,7 +852,8 @@ See https://agentclientprotocol.com/protocol/schema#session-load."
                 ;; directory-file-name removes any trailing /
                 (cwd . ,(directory-file-name (expand-file-name cwd)))
                 (mcpServers . ,(or mcp-servers []))
-                ,@(when meta `((_meta . ,meta)))))))
+                ,@(when meta `((_meta . ,meta)))
+                ,@(acp--make-system-prompt-param :system-prompt system-prompt)))))
 
 (cl-defun acp-make-session-delete-request (&key session-id)
   "Instantiate a \"session/delete\" request.

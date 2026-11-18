@@ -267,6 +267,45 @@ echo ready > %1$s; while :; do sleep 0.05; done"
                  '((:method . "session/list")
                    (:params . ((cursor . "page-2")))))))
 
+(ert-deftest acp-test-session-new-request-omits-system-prompt-by-default ()
+  "Leave systemPrompt out when no system prompt is given."
+  (should (equal (acp-make-session-new-request :cwd "/tmp/")
+                 '((:method . "session/new")
+                   (:params . ((cwd . "/tmp")
+                               (mcpServers . [])))))))
+
+(ert-deftest acp-test-session-new-request-appends-system-prompt ()
+  "Send a system prompt string as an append with a single text block."
+  (should (equal (acp-make-session-new-request :cwd "/tmp/"
+                                               :system-prompt "Be terse.")
+                 '((:method . "session/new")
+                   (:params . ((cwd . "/tmp")
+                               (mcpServers . [])
+                               (systemPrompt . ((mode . "append")
+                                                (content . [((type . "text")
+                                                             (text . "Be terse."))]))))))))
+  (should (equal (acp--serialize-json
+                  (map-elt (acp-make-session-new-request :cwd "/tmp/"
+                                                         :system-prompt "Be terse.")
+                           :params))
+                 "{\"cwd\":\"/tmp\",\"mcpServers\":[],\"systemPrompt\":{\"mode\":\"append\",\"content\":[{\"type\":\"text\",\"text\":\"Be terse.\"}]}}\n")))
+
+(ert-deftest acp-test-session-restore-requests-carry-system-prompt ()
+  "Send the system prompt on load, resume and fork too."
+  (dolist (maker '(acp-make-session-load-request
+                   acp-make-session-resume-request
+                   acp-make-session-fork-request))
+    (should (equal (map-nested-elt
+                    (funcall maker :session-id "s1" :cwd "/tmp/"
+                             :system-prompt "Be terse.")
+                    '(:params systemPrompt))
+                   '((mode . "append")
+                     (content . [((type . "text")
+                                  (text . "Be terse."))]))))
+    (should-not (map-nested-elt
+                 (funcall maker :session-id "s1" :cwd "/tmp/")
+                 '(:params systemPrompt)))))
+
 (defun acp-test--captured-filter (client)
   "Start CLIENT with a stubbed process and return its `:filter'."
   (let (filter)
