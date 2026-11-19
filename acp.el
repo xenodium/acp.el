@@ -137,6 +137,7 @@ the error is logged."
   (let* ((coding-system-for-read 'utf-8-unix)
          (coding-system-for-write 'utf-8-unix)
          (pending-input "")
+         (pending-stderr "")
          (message-queue nil)
          (message-queue-busy nil)
          (drain-queue nil)
@@ -148,18 +149,24 @@ the error is logged."
     (with-current-buffer stderr-buffer
       (add-hook 'after-change-functions
                 (lambda (beg end _len)
-                  (let ((raw-output (buffer-substring-no-properties beg end)))
+                  (let ((raw-output (buffer-substring-no-properties beg end))
+                        (start 0)
+                        pos)
                     (acp--log client "STDERR" "%s" (string-trim raw-output))
-                    (when-let* ((std-error (cond
-                                            ((acp--parse-stderr-api-error raw-output)
-                                             (acp--parse-stderr-api-error raw-output))
-                                            ((not (string-empty-p raw-output))
-                                             ;; Preserve whitespace-only chunks: consumers
-                                             ;; append messages to reconstruct stderr.
-                                             (acp--make-internal-error raw-output)))))
-                      (acp--log client "API-ERROR" "%s" (string-trim raw-output))
-                      (dolist (handler (map-elt client :error-handlers))
-                        (funcall handler std-error)))))
+                    ;; Stderr arrives in arbitrary chunks.  Hold back any
+                    ;; partial line until its newline arrives (or the
+                    ;; process exits), so handlers get whole lines.
+                    ;;
+                    ;; Unlike stdout, whose newline merely delimits JSON
+                    ;; messages, each line keeps its newline: consumers
+                    ;; append messages to reconstruct stderr verbatim.
+                    (setq pending-stderr (concat pending-stderr raw-output))
+                    (while (setq pos (string-search "\n" pending-stderr start))
+                      (acp--route-stderr-line
+                       :client client
+                       :line (substring pending-stderr start (1+ pos)))
+                      (setq start (1+ pos)))
+                    (setq pending-stderr (substring pending-stderr start))))
                 nil t))
     ;; Drains the queue in order, resetting the busy flag via
     ;; `unwind-protect' and rescheduling itself when messages are left
@@ -253,6 +260,15 @@ the error is logged."
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
                     :sentinel (lambda (process event)
+                                ;; Flush a final stderr line lacking its
+                                ;; newline.  Unlike a partial JSON message
+                                ;; on stdout, it's still worth showing
+                                ;; (often the agent's last words).
+                                (unless (string-empty-p pending-stderr)
+                                  (acp--route-stderr-line
+                                   :client client
+                                   :line pending-stderr)
+                                  (setq pending-stderr ""))
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))
                                 (when (memq (process-status process) '(exit signal))
@@ -374,7 +390,11 @@ ON-ERROR is of the form: (lambda (error))
 and invoked with BUFFER as current.
 
 Note: These are agent process errors.
-      For request errors refer to corresponding API's on-error."
+      For request errors refer to corresponding API's on-error.
+
+Agent stderr is delivered one line per error, each line keeping its
+trailing newline.  A final line lacking a newline is delivered when
+the agent process exits."
   (unless client
     (error ":client is required"))
   (unless on-error
@@ -1041,6 +1061,21 @@ ON-REQUEST is of the form (lambda (request))."
      (when t
        (acp--log client nil "↳ Routing undefined (could not recognize)\n\n%s" (map-elt message :object))
        (acp--log-traffic client 'incoming 'unknown message)))))
+
+(cl-defun acp--route-stderr-line (&key client line)
+  "Notify CLIENT's error handlers about stderr LINE.
+
+LINE keeps its trailing newline (absent only for a final line flushed
+at exit), so concatenating every message reconstructs stderr.
+Whitespace-only lines are routed too, for the same reason.
+
+For example, stderr \"one\\n\\ntwo\" is routed as three calls, with
+LINE \"one\\n\", \"\\n\", and \"two\" (the last at exit)."
+  (let ((std-error (or (acp--parse-stderr-api-error line)
+                       (acp--make-internal-error line))))
+    (acp--log client "API-ERROR" "%s" (string-trim line))
+    (dolist (handler (map-elt client :error-handlers))
+      (funcall handler std-error))))
 
 (cl-defun acp--parse-stderr-api-error (raw-output)
   "Parse RAW-OUTPUT, typically from stderr.

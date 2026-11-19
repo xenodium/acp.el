@@ -32,12 +32,13 @@
       (when (buffer-live-p log-buffer)
         (kill-buffer log-buffer)))))
 
-(ert-deftest acp-test-stderr-preserves-whitespace-only-chunks ()
-  "Forward stderr chunks unchanged so consumers can concatenate them."
+(defun acp-test--stderr-messages (chunks &optional exit)
+  "Return the error messages routed for stderr CHUNKS.
+
+When EXIT is non-nil, run the process sentinel after inserting CHUNKS."
   (let ((client (acp-make-client :command "cat"))
         (acp-logging-enabled nil)
-        (chunks '("hello" " " "world" "\n" "\t" "next\n"))
-        stderr-buffer received)
+        stderr-buffer sentinel received)
     (acp-subscribe-to-errors
      :client client
      :on-error (lambda (error-data)
@@ -48,14 +49,41 @@
           (cl-letf (((symbol-function 'make-process)
                      (lambda (&rest args)
                        (setq stderr-buffer (plist-get args :stderr))
+                       (setq sentinel (plist-get args :sentinel))
                        nil)))
             (acp--start-client :client client))
           (with-current-buffer stderr-buffer
             (dolist (chunk chunks)
               (insert chunk)))
-          (should (equal (nreverse received) chunks)))
+          (when exit
+            (cl-letf (((symbol-function 'process-status)
+                       (lambda (_process) 'exit)))
+              (funcall sentinel nil "finished\n")))
+          (nreverse received))
       (when (buffer-live-p stderr-buffer)
         (kill-buffer stderr-buffer)))))
+
+(ert-deftest acp-test-stderr-preserves-whitespace ()
+  "Route whole stderr lines, whitespace included, so they concatenate back."
+  (let* ((chunks '("hello" " " "world" "\n" "\t" "next\n" "\n"))
+         (messages (acp-test--stderr-messages chunks)))
+    (should (equal messages '("hello world\n" "\tnext\n" "\n")))
+    (should (equal (apply #'concat messages) (apply #'concat chunks)))))
+
+(ert-deftest acp-test-stderr-splits-chunk-into-lines ()
+  "Route a chunk holding several lines as one message per line."
+  (should (equal (acp-test--stderr-messages
+                  '("[idle-compaction] disarmed: prompt\n[idle-compaction] armed\npart"
+                    "ial\n"))
+                 '("[idle-compaction] disarmed: prompt\n"
+                   "[idle-compaction] armed\n"
+                   "partial\n"))))
+
+(ert-deftest acp-test-stderr-holds-partial-line-until-exit ()
+  "Hold back a line lacking its newline until the process exits."
+  (should-not (acp-test--stderr-messages '("no newline yet")))
+  (should (equal (acp-test--stderr-messages '("done\n" "no newline") t)
+                 '("done\n" "no newline"))))
 
 (ert-deftest acp-test-trim-log-buffer-unibyte ()
   "Trim unibyte logs on whole-message boundaries."
