@@ -1075,7 +1075,14 @@ LINE \"one\\n\", \"\\n\", and \"two\" (the last at exit)."
                        (acp--make-internal-error line))))
     (acp--log client "API-ERROR" "%s" (string-trim line))
     (dolist (handler (map-elt client :error-handlers))
-      (funcall handler std-error))))
+      ;; Contained: an erroring handler would otherwise make Emacs
+      ;; clear `after-change-functions', silencing stderr for the rest
+      ;; of the session, or abort the sentinel's cleanup.
+      (condition-case-unless-debug err
+          (funcall handler std-error)
+        (error
+         (acp--log client "ERROR HANDLER ERROR"
+                   "Failed with error: %S" err))))))
 
 (cl-defun acp--parse-stderr-api-error (raw-output)
   "Parse RAW-OUTPUT, typically from stderr.

@@ -85,6 +85,31 @@ When EXIT is non-nil, run the process sentinel after inserting CHUNKS."
   (should (equal (acp-test--stderr-messages '("done\n" "no newline") t)
                  '("done\n" "no newline"))))
 
+(ert-deftest acp-test-stderr-survives-erroring-handler ()
+  "Keep routing stderr lines after an error handler signals."
+  (let ((client (acp-make-client :command "cat"))
+        (acp-logging-enabled nil)
+        (debug-on-error nil)
+        stderr-buffer received)
+    (acp-subscribe-to-errors
+     :client client
+     :on-error (lambda (error-data)
+                 (push (map-elt error-data 'message) received)
+                 (error "Boom")))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest args)
+                       (setq stderr-buffer (plist-get args :stderr))
+                       nil)))
+            (acp--start-client :client client))
+          (with-current-buffer stderr-buffer
+            (insert "one\n")
+            (insert "two\n"))
+          (should (equal (nreverse received) '("one\n" "two\n"))))
+      (when (buffer-live-p stderr-buffer)
+        (kill-buffer stderr-buffer)))))
+
 (ert-deftest acp-test-trim-log-buffer-unibyte ()
   "Trim unibyte logs on whole-message boundaries."
   (let* ((msg1 (cons "A" "one"))
