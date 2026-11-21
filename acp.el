@@ -186,11 +186,16 @@ the error is logged."
           (lambda ()
             (let ((deadline (when acp-drain-time-budget
                               (+ (float-time) acp-drain-time-budget)))
+                  ;; A fontification function calling `sit-for' (as
+                  ;; emojify does) runs this timer mid-redisplay, where
+                  ;; handlers inserting text abort Emacs (agent-shell
+                  ;; #953).  Route nothing then and retry shortly.
+                  (deferred (or inhibit-redisplay inhibit-modification-hooks))
                   ;; Checked after routing, so every drain routes at
                   ;; least one message and a tiny budget can't spin.
                   (within-budget t))
               (unwind-protect
-                  (while (and message-queue within-budget)
+                  (while (and message-queue within-budget (not deferred))
                     ;; Bind print variables so the debugger
                     ;; can safely print the client alist
                     ;; without infinite recursion (#360).
@@ -225,8 +230,11 @@ the error is logged."
                                               (< (float-time) deadline)))))
                 ;; Keep the busy flag raised while a drain is still
                 ;; pending, so the filter doesn't schedule a second one.
+                ;; A deferred retry must not be due at once: Emacs keeps
+                ;; running due timers before returning from a wait, so
+                ;; one that keeps rescheduling itself at 0 hangs it.
                 (if message-queue
-                    (run-at-time 0 nil drain-queue)
+                    (run-at-time (if deferred 0.05 0) nil drain-queue)
                   (setq message-queue-busy nil))))))
     (let ((process (make-process
                     :name (format "acp-client(%s)-%s"

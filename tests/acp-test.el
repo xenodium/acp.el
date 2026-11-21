@@ -388,6 +388,27 @@ TIMEOUT defaults to 1.  Returns nil if PREDICATE never held."
         (quit nil)))
     (funcall predicate)))
 
+(ert-deftest acp-test-drain-defers-mid-redisplay ()
+  "Route nothing while redisplay runs Lisp, then resume in order."
+  (let* ((acp-logging-enabled nil)
+         (client (acp-make-client :command "cat"))
+         received filter)
+    (acp-subscribe-to-notifications
+     :client client
+     :on-notification (lambda (notification)
+                        (push (map-nested-elt notification '(params n)) received)))
+    (unwind-protect
+        (progn
+          (setq filter (acp-test--captured-filter client))
+          (funcall filter nil (mapconcat #'acp-test--notification-line '(1 2) ""))
+          ;; Stand in for emojify's `sit-for' running timers mid-redisplay.
+          (let ((inhibit-redisplay t))
+            (acp-test--drain-until (lambda () received) 0.2))
+          (should-not received)
+          (acp-test--drain-until (lambda () (= (length received) 2)))
+          (should (equal (nreverse received) '(1 2))))
+      (acp-shutdown :client client))))
+
 (ert-deftest acp-test-drain-survives-quitting-notification-handler ()
   "Keep routing queued messages after a handler exits non-locally."
   (let* ((acp-logging-enabled nil)
