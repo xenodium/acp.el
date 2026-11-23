@@ -164,6 +164,74 @@ When EXIT is non-nil, run the process sentinel after inserting CHUNKS."
       (accept-process-output nil 0.05))
     client))
 
+(ert-deftest acp-test-callback-errors-visible-without-logging ()
+  "Report callback errors while allowing later messages to be routed."
+  (let ((acp-logging-enabled nil)
+        (debug-on-error nil)
+        (client (acp-make-client
+                 :command "sh"
+                 :command-params
+                 (list "-c"
+                       (concat
+                        "IFS= read -r _; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}' '{\"jsonrpc\":\"2.0\",\"id\":101,\"method\":\"test/request\"}' '{\"jsonrpc\":\"2.0\",\"method\":\"test/notice\"}'; "
+                        "IFS= read -r _; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32603,\"message\":\"agent error\"}}'; "
+                        "IFS= read -r _; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"ok\":true}}'; cat"))))
+        warnings received)
+    (acp-subscribe-to-notifications
+     :client client :on-notification (lambda (_) (error "notice failed")))
+    (acp-subscribe-to-requests
+     :client client :on-request (lambda (_) (error "request handler failed")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (type message &rest _)
+                     (when (eq type 'acp) (push message warnings)))))
+          (acp-send-request :client client :request '((:method . "first"))
+                            :on-success (lambda (_) (error "success callback failed")))
+          (acp-send-request :client client :request '((:method . "second"))
+                            :on-failure (lambda (_) (error "failure callback failed")))
+          (acp-send-request :client client :request '((:method . "third"))
+                            :on-success (lambda (result) (setq received result)))
+          (should (acp-test--drain-until (lambda () (map-elt received 'ok))))
+          (should (= (length warnings) 4))
+          (dolist (excerpt '("success callback failed" "request handler failed"
+                             "notice failed" "failure callback failed"))
+            (should (seq-some (lambda (warning) (string-match-p excerpt warning)) warnings))))
+      (acp-shutdown :client client))))
+
+(ert-deftest acp-test-unserializable-request-does-not-stay-pending ()
+  "Reject malformed requests locally and continue to use the connection."
+  (let ((client (acp-make-client
+                 :command "sh"
+                 :command-params
+                 '("-c" "IFS= read -r _; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}'; cat")))
+        (bad-request '((:method . "bad/request") (:params (value . invalid-json-symbol))))
+        (context (generate-new-buffer " *acp-test-context*"))
+        failure error-buffer raw-message)
+    (unwind-protect
+        (progn
+          (should-error (acp-send-request :client client :request bad-request :sync t))
+          (should (= (map-elt client :request-id) 0))
+          (should-not (map-elt client :pending-requests))
+          (acp-send-request
+           :client client :request bad-request :buffer context
+           :on-failure (lambda (error-data message)
+                         (setq failure error-data
+                               raw-message (map-elt message :json)
+                               error-buffer (current-buffer))))
+          (should (eq error-buffer context))
+          (should-not raw-message)
+          (should (= (map-elt failure 'code) -32603))
+          (should (string-match-p "bad/request" (map-elt failure 'message)))
+          (should-not (map-elt client :pending-requests))
+          (should (= (map-elt client :request-id) 0))
+          (let (received)
+            (acp-send-request :client client :request '((:method . "valid"))
+                              :on-success (lambda (result) (setq received result)))
+            (should (acp-test--drain-until (lambda () (map-elt received 'ok))))
+            (should-not (map-elt client :pending-requests))))
+      (acp-shutdown :client client)
+      (kill-buffer context))))
+
 (ert-deftest acp-test-shutdown-releases-client-whose-process-exited ()
   "Release handlers and buffers even when the process already exited."
   (let ((client (acp-test--exited-client)))

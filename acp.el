@@ -216,16 +216,14 @@ the error is logged."
                            (condition-case-unless-debug err
                                (funcall handler notification)
                              (error
-                              (acp--log client "NOTIFICATION HANDLER ERROR"
-                                        "Failed with error: %S" err)))))
+                              (acp--report-callback-error client "Notification handler" err)))))
                        :on-request
                        (lambda (request)
                          (dolist (handler (map-elt client :request-handlers))
                            (condition-case-unless-debug err
                                (funcall handler request)
                              (error
-                              (acp--log client "REQUEST HANDLER ERROR"
-                                        "Failed with error: %S" err))))))
+                              (acp--report-callback-error client "Incoming request handler" err))))))
                       (setq within-budget (or (null deadline)
                                               (< (float-time) deadline)))))
                 ;; Keep the busy flag raised while a drain is still
@@ -297,6 +295,12 @@ Used for errors synthesized locally rather than received from the
 agent over the wire.  Code -32603 is JSON-RPC's \"Internal error\"."
   (acp-make-error :code -32603 :message message))
 
+(defun acp--report-callback-error (client label err)
+  "Report contained callback error ERR for CLIENT with LABEL."
+  (let ((description (error-message-string err)))
+    (acp--log client label "%s" description)
+    (display-warning 'acp (format "%s: %s" label description))))
+
 (cl-defun acp--call-request-failure (&key client incoming-response error-data message)
   "Invoke INCOMING-RESPONSE's failure callback with ERROR-DATA and MESSAGE."
   (with-temp-buffer ;; Fallback to a temp buffer
@@ -312,8 +316,7 @@ agent over the wire.  Code -32603 is JSON-RPC's \"Internal error\"."
                 (funcall callback error-data message)
               (funcall callback error-data))
           (error
-           (acp--log client "RESPONSE HANDLER ERROR"
-                     "Failed with error: %S" err)))))))
+           (acp--report-callback-error client "Response failure callback" err)))))))
 
 (cl-defun acp--fail-pending-requests (&key client event)
   "Invoke `:on-failure' for any pending requests on CLIENT.
@@ -343,8 +346,7 @@ shape used by `acp--route-incoming-message' for response failures."
                                  (error . ,error-data))
                        :json nil))
           (error
-           (acp--log client "REQUEST FAILURE CALLBACK ERROR"
-                     "Failed with error: %S" err)))))))
+           (acp--report-callback-error client "Pending request failure callback" err)))))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.
@@ -461,6 +463,8 @@ ON-SUCCESS is of the form (lambda (response)).
 ON-FAILURE is of the form (lambda (error)).
 
 When non-nil SYNC, send request synchronously.
+The default sender reports local serialization failures through ON-FAILURE
+for asynchronous calls that supply it, and signals an error otherwise.
 When BUFFER is provided, callbacks executed within buffer context."
   (unless client
     (error ":client is required"))
@@ -518,14 +522,36 @@ SYNC: When non-nil, send request synchronously."
                     (method . ,method)
                     (id . ,request-id)
                     ,@(when params `((params . ,params)))))
+         (pending `((:request . ,request)
+                    (:buffer . ,buffer)
+                    (:on-success . ,on-success)
+                    (:on-failure . ,on-failure)))
          (result nil)
-         (done nil))
+         (done nil)
+         ;; A request that cannot be serialized will never get a response.
+         (json (condition-case-unless-debug err
+                   (acp--serialize-json request)
+                 (error
+                  (let ((description
+                         (format "Cannot serialize ACP request %s: %s" method
+                                 (or (get (car err) 'error-message)
+                                     (symbol-name (car err))))))
+                    (when (or sync (not on-failure))
+                      (error "%s" description))
+                    (let ((error-data (acp--make-internal-error description)))
+                      (acp--call-request-failure
+                       :client client
+                       :incoming-response pending
+                       :error-data error-data
+                       :message (acp--make-message
+                                 :object `((jsonrpc . ,acp--jsonrpc-version)
+                                           (id . ,request-id)
+                                           (error . ,error-data))
+                                 :json nil)))
+                    (cl-return-from acp--request-sender nil))))))
     (map-put! client :request-id request-id)
     (map-put! client :pending-requests
-              (cons (cons request-id `((:request . ,request)
-                                       (:buffer . ,buffer)
-                                       (:on-success . ,on-success)
-                                       (:on-failure . ,on-failure)))
+              (cons (cons request-id pending)
                     (map-elt client :pending-requests)))
     (when sync
       (map-put! (map-nested-elt client `(:pending-requests ,request-id)) :on-success
@@ -537,10 +563,9 @@ SYNC: When non-nil, send request synchronously."
                   (setq result data
                         done 'error))))
     (acp--log client "OUTGOING OBJECT" "%s" request)
-    (let ((json (acp--serialize-json request)))
-      (acp--log client "OUTGOING TEXT" "%s" json)
-      (acp--log-traffic client 'outgoing 'request (acp--make-message :object request :json json))
-      (process-send-string proc json))
+    (acp--log client "OUTGOING TEXT" "%s" json)
+    (acp--log-traffic client 'outgoing 'request (acp--make-message :object request :json json))
+    (process-send-string proc json)
     (when sync
       (while (not done)
         (accept-process-output proc 0.01))
@@ -1027,8 +1052,7 @@ ON-REQUEST is of the form (lambda (request))."
                (condition-case-unless-debug err
                    (funcall (map-elt incoming-response :on-success) .result)
                  (error
-                  (acp--log client "RESPONSE HANDLER ERROR"
-                            "Failed with error: %S" err)))))
+                  (acp--report-callback-error client "Response success callback" err)))))
          ;; TODO: Consolidate serialization.
          (acp--log client nil "Unhandled result:\n\n%s" message))
        t)
@@ -1089,8 +1113,7 @@ LINE \"one\\n\", \"\\n\", and \"two\" (the last at exit)."
       (condition-case-unless-debug err
           (funcall handler std-error)
         (error
-         (acp--log client "ERROR HANDLER ERROR"
-                   "Failed with error: %S" err))))))
+         (acp--report-callback-error client "Stderr error handler" err))))))
 
 (cl-defun acp--parse-stderr-api-error (raw-output)
   "Parse RAW-OUTPUT, typically from stderr.
